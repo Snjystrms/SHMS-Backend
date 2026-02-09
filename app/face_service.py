@@ -28,9 +28,9 @@ def find_match(embedding):
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT u.id, u.name, fe.embedding <=> %s::vector AS distance
-            FROM face_embeddings fe
-            JOIN users u ON u.id = fe.user_id
+            SELECT cm.id, cm.name, cfe.embedding <=> %s::vector AS distance
+            FROM crew_face_embeddings cfe
+            JOIN crew_members cm ON cm.id = cfe.crew_member_id
             ORDER BY distance
             LIMIT 1;
         """, (embedding.tolist(),))
@@ -38,8 +38,8 @@ def find_match(embedding):
         row = cur.fetchone()
 
         if row:
-            user_id, username, distance = row
-            return user_id, username, distance
+            crew_member_id, name, distance = row
+            return crew_member_id, name, distance
 
         # 👇 ALWAYS return 3 values
         return None, None, None
@@ -52,18 +52,49 @@ def find_match(embedding):
 
 
 def register_user(name, embedding):
-    user_id = str(uuid.uuid4())
+    """Register a new crew member with an initial face embedding."""
+    crew_member_id = str(uuid.uuid4())
     emb_id = str(uuid.uuid4())
 
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO users (id, name) VALUES (%s, %s)",
-        (user_id, name)
+        "INSERT INTO crew_members (id, name) VALUES (%s, %s)",
+        (crew_member_id, name)
     )
     cur.execute(
-        "INSERT INTO face_embeddings (id, user_id, embedding) VALUES (%s, %s, %s)",
-        (emb_id, user_id, embedding.tolist())
+        "INSERT INTO crew_face_embeddings (id, crew_member_id, embedding) VALUES (%s, %s, %s)",
+        (emb_id, crew_member_id, embedding.tolist())
     )
 
     conn.commit()
-    return user_id
+    return crew_member_id
+
+
+def add_face_embedding(crew_member_id, embedding):
+    """Add an additional face embedding for an existing crew member."""
+    emb_id = str(uuid.uuid4())
+    
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO crew_face_embeddings (id, crew_member_id, embedding) VALUES (%s, %s, %s)",
+            (emb_id, crew_member_id, embedding.tolist())
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error adding face embedding: {e}")
+        return False
+
+
+def get_user_id_by_name(name):
+    """Get crew_member_id by crew member name"""
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id FROM crew_members WHERE name = %s LIMIT 1", (name,))
+        row = cur.fetchone()
+        return row[0] if row else None
+    except Exception as e:
+        print(f"Error getting user by name: {e}")
+        return None

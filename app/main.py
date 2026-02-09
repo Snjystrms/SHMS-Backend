@@ -1,8 +1,16 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from app.face_service import get_embedding, find_match, register_user
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],        # Allow all origins (DEV only)
+    allow_credentials=True,
+    allow_methods=["*"],        # GET, POST, PUT, DELETE
+    allow_headers=["*"],        # Content-Type, Authorization, etc.
+)
 
 @app.post("/identify")
 async def identify_face(file: UploadFile = File(...)):
@@ -42,7 +50,7 @@ async def register_face(
             "success": False,
             "message": "Invalid image or no face detected"
         }
-
+    
     # 🔍 CHECK IF FACE ALREADY EXISTS
     existing_user_id, existing_username, distance = find_match(embedding)
 
@@ -63,3 +71,53 @@ async def register_face(
         "user_id": user_id,
         "message": "User registered successfully"
     }
+
+
+@app.post("/add-photo")
+async def add_photo(
+    file: UploadFile = File(...),
+    user_id: str = Form(None),
+    name: str = Form(None)
+):
+    """Add an additional photo to an existing user (by user_id or name)"""
+    
+    if not user_id and not name:
+        return {
+            "success": False,
+            "message": "Either user_id or name is required"
+        }
+    
+    image_bytes = await file.read()
+    embedding = get_embedding(image_bytes)
+
+    if embedding is None:
+        return {
+            "success": False,
+            "message": "Invalid image or no face detected"
+        }
+    
+    from app.face_service import add_face_embedding, get_user_id_by_name
+    
+    # If name is provided, get the user_id
+    if name and not user_id:
+        user_id = get_user_id_by_name(name)
+        if not user_id:
+            return {
+                "success": False,
+                "message": f"User '{name}' not found"
+            }
+    
+    # Add embedding for the existing user
+    result = add_face_embedding(user_id, embedding)
+
+    if result:
+        return {
+            "success": True,
+            "message": "Photo added successfully",
+            "user_id": user_id
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Failed to add photo"
+        }
