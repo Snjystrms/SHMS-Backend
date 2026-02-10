@@ -9,3 +9,6 @@ onnxruntime==1.16.3
 python-dotenv
 SQLAlchemy
 alembic
+PyJWT==2.10.1
+passlib[bcrypt]==1.7.4
+email-validator==2.2.0

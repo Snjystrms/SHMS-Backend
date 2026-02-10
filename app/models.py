@@ -33,6 +33,13 @@ class User(BaseModel):
     deleted_at: Optional[datetime] = None
 
 
+class UserCreate(BaseModel):
+    name: str
+    email: EmailStr
+    phone: str
+    password: str
+
+
 class CrewMember(BaseModel):
     id: str
     name: str

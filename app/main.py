@@ -1,6 +1,11 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, status
 from app.face_service import get_embedding, find_match, register_user
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
+from app.auth import create_access_token, verify_password, get_password_hash, get_admin_user
+from app.user_service import get_user_by_email, update_user_password, get_role_id_by_name, create_user
+from app.models import UserCreate
+from datetime import timedelta
 
 app = FastAPI()
 
@@ -121,3 +126,92 @@ async def add_photo(
             "success": False,
             "message": "Failed to add photo"
         }
+
+
+@app.post("/login")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    """Admin login endpoint."""
+    user = get_user_by_email(form_data.username)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    if not verify_password(form_data.password, user["password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Optional: Automatically hash plain text password on first login
+    if not user["password"].startswith("$2b$") and not user["password"].startswith("$2a$"):
+        hashed = get_password_hash(form_data.password)
+        update_user_password(user["id"], hashed)
+
+    access_token_expires = timedelta(minutes=60 * 24)
+    access_token = create_access_token(
+        data={"sub": user["id"], "role": "admin"}, # In a real app, fetch role name
+        expires_delta=access_token_expires
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "email": user["email"]
+        }
+    }
+
+@app.get("/me")
+async def get_me(current_user: dict = Depends(get_admin_user)):
+    """Get current logged in admin details."""
+    return current_user
+
+
+@app.post("/admin/create-officer", status_code=status.HTTP_201_CREATED)
+async def create_officer_account(
+    user_data: UserCreate,
+    current_admin: dict = Depends(get_admin_user)
+):
+    """Admin-only endpoint to create an officer account."""
+    # Check if user already exists
+    existing_user = get_user_by_email(user_data.email)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User with this email already exists"
+        )
+    
+    # Get officer role ID
+    role_id = get_role_id_by_name("officer")
+    if not role_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Officer role not found in database"
+        )
+    
+    # Hash password
+    hashed_password = get_password_hash(user_data.password)
+    
+    # Create user
+    new_user_dict = user_data.dict()
+    new_user_dict["password"] = hashed_password
+    
+    user_id = create_user(new_user_dict, role_id)
+    
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create officer account"
+        )
+    
+    return {
+        "success": True,
+        "user_id": user_id,
+        "message": "Officer account created successfully"
+    }
