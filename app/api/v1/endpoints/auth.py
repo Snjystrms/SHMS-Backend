@@ -65,7 +65,7 @@ async def login(form_data: LoginRequestForm = Depends()):
         }
     }
 
-@router.post("/register", status_code=status.HTTP_201_CREATED)
+@router.post("/boat-owners/register", status_code=status.HTTP_201_CREATED)
 async def register_boat_owner(user_data: UserCreate):
     """
     Public registration endpoint for boat owners.

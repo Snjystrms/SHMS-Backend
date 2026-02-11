@@ -114,3 +114,72 @@ async def delete_officer(officer_id: str, current_admin: dict = Depends(deps.get
         )
     
     return {"success": True, "message": "Officer deleted successfully"}
+
+# ==================== Boat Owner CRUD Operations ====================
+
+@router.get("/boat-owners")
+async def list_boat_owners(current_admin: dict = Depends(deps.get_admin_user)):
+    """List all boat owners."""
+    boat_owners = crud_user.get_boat_owners()
+    return {"success": True, "boat_owners": boat_owners}
+
+@router.get("/boat-owners/{boat_owner_id}")
+async def get_boat_owner(boat_owner_id: str, current_admin: dict = Depends(deps.get_admin_user)):
+    """Get details of a specific boat owner."""
+    boat_owner = crud_user.get_user_by_id(boat_owner_id)
+    if not boat_owner:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Boat owner not found"
+        )
+    return {"success": True, "boat_owner": boat_owner}
+
+@router.put("/boat-owners/{boat_owner_id}")
+async def update_boat_owner(
+    boat_owner_id: str,
+    user_data: UserUpdate,
+    current_admin: dict = Depends(deps.get_admin_user)
+):
+    """Update a boat owner's details."""
+    # Check if boat owner exists
+    existing_boat_owner = crud_user.get_user_by_id(boat_owner_id)
+    if not existing_boat_owner:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Boat owner not found"
+        )
+    
+    # If password is being updated, hash it
+    update_dict = user_data.dict(exclude_unset=True)
+    if "password" in update_dict and update_dict["password"]:
+        update_dict["password"] = security.get_password_hash(update_dict["password"])
+    
+    result = crud_user.update_user(boat_owner_id, update_dict)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update boat owner"
+        )
+    
+    return {"success": True, "message": "Boat owner updated successfully"}
+
+@router.delete("/boat-owners/{boat_owner_id}")
+async def delete_boat_owner(boat_owner_id: str, current_admin: dict = Depends(deps.get_admin_user)):
+    """Soft delete a boat owner account."""
+    # Check if boat owner exists
+    existing_boat_owner = crud_user.get_user_by_id(boat_owner_id)
+    if not existing_boat_owner:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Boat owner not found"
+        )
+    
+    result = crud_user.delete_user(boat_owner_id)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete boat owner"
+        )
+    
+    return {"success": True, "message": "Boat owner deleted successfully"}
+
