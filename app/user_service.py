@@ -2,8 +2,8 @@ from app.database import conn
 from typing import Optional
 import uuid
 
-def get_user_by_email(email: str):
-    """Fetch a user by their email address."""
+def get_user_by_identifier(identifier: str):
+    """Fetch a user by their email address or phone number."""
     cur = conn.cursor()
     try:
         cur.execute(
@@ -11,9 +11,9 @@ def get_user_by_email(email: str):
             SELECT u.id, u.name, u.email, u.password, u.role_id, r.name as role_name 
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
-            WHERE u.email = %s AND u.deleted_at IS NULL
+            WHERE (u.email = %s OR u.phone = %s) AND u.deleted_at IS NULL
             """,
-            (email,)
+            (identifier, identifier)
         )
         row = cur.fetchone()
         if row:
@@ -27,7 +27,7 @@ def get_user_by_email(email: str):
             }
         return None
     except Exception as e:
-        print(f"Error fetching user by email: {e}")
+        print(f"Error fetching user by identifier: {e}")
         return None
     finally:
         cur.close()

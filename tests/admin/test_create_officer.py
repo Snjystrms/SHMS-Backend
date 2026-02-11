@@ -6,7 +6,7 @@ BASE_URL = "http://localhost:8000"
 def get_admin_token():
     print("Logging in as admin...")
     data = {
-        "username": "admin@example.com",
+        "email_or_phone": "admin@example.com",
         "password": "admin123"
     }
     response = requests.post(f"{BASE_URL}/login", data=data, timeout=10)

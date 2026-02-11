@@ -3,7 +3,7 @@ from app.face_service import get_embedding, find_match, register_user
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from app.auth import create_access_token, verify_password, get_password_hash, get_admin_user
-from app.user_service import get_user_by_email, update_user_password, get_role_id_by_name, create_user
+from app.user_service import get_user_by_identifier, update_user_password, get_role_id_by_name, create_user
 from app.models import UserCreate
 from app.utils import get_local_ip
 from datetime import timedelta
@@ -144,21 +144,38 @@ async def add_photo(
         }
 
 
+class LoginRequestForm:
+    def __init__(
+        self,
+        email_or_phone: str = Form(..., description="Email or Phone Number"),
+        password: str = Form(...),
+        grant_type: str = Form(None, pattern="password"),
+        scope: str = Form(""),
+        client_id: str = Form(None),
+        client_secret: str = Form(None),
+    ):
+        self.email_or_phone = email_or_phone
+        self.password = password
+        self.grant_type = grant_type
+        self.scope = scope
+        self.client_id = client_id
+        self.client_secret = client_secret
+
 @app.post("/login")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+async def login(form_data: LoginRequestForm = Depends()):
     """Admin login endpoint."""
-    user = get_user_by_email(form_data.username)
+    user = get_user_by_identifier(form_data.email_or_phone)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail="Incorrect email/phone",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
     if not verify_password(form_data.password, user["password"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+            detail="Incorrect password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
@@ -191,7 +208,7 @@ async def create_officer_account(
 ):
     """Admin-only endpoint to create an officer account."""
     # Check if user already exists
-    existing_user = get_user_by_email(user_data.email)
+    existing_user = get_user_by_identifier(user_data.email)
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
