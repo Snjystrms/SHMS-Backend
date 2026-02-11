@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 # Load .env so Alembic sees the same DB settings as the app.
 load_dotenv(override=True)
 
+from app.core.config import settings
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
@@ -22,14 +24,9 @@ target_metadata = None
 
 
 def get_url() -> str:
-    """Build the database URL from environment variables (.env used in app)."""
-    user = os.getenv("DB_USER", "")
-    password = os.getenv("DB_PASSWORD", "")
-    host = os.getenv("DB_HOST", "localhost")
-    port = os.getenv("DB_PORT", "5432")
-    db = os.getenv("DB_NAME", "postgres")
+    """Build the database URL from settings."""
+    return f"postgresql+psycopg2://{settings.DB_USER}:{settings.DB_PASSWORD}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
 
-    return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db}"
 
 
 def run_migrations_offline() -> None:

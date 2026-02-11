@@ -2,7 +2,8 @@ import requests
 import json
 import sys
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8000/api/v1"
+
 
 def test_login(identifier, password, label):
     print(f"\nTesting {label} login...")

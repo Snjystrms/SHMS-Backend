@@ -1,7 +1,8 @@
 import requests
 import json
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8000/api/v1"
+
 
 def get_admin_token():
     print("Logging in as admin...")
