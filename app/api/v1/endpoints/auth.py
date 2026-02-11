@@ -11,14 +11,22 @@ router = APIRouter()
 class LoginRequestForm:
     def __init__(
         self,
-        mobile_number: str = Form(..., description="Email or Phone Number"),
+        mobile_number: str = Form(None, description="Mobile Number"),
+        username: str = Form(None, description="Mobile Number (OAuth2 compatibility)"),
         password: str = Form(...),
         grant_type: str = Form(None, pattern="password"),
         scope: str = Form(""),
         client_id: str = Form(None),
         client_secret: str = Form(None),
     ):
-        self.mobile_number = mobile_number
+        # Accept either mobile_number or username (for OAuth2 compatibility)
+        self.mobile_number = mobile_number or username
+        if not self.mobile_number:
+            from fastapi import HTTPException, status
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Either mobile_number or username must be provided"
+            )
         self.password = password
         self.grant_type = grant_type
         self.scope = scope
@@ -27,12 +35,12 @@ class LoginRequestForm:
 
 @router.post("/login", response_model=Token)
 async def login(form_data: LoginRequestForm = Depends()):
-    """Admin login endpoint."""
+    """Login endpoint - accepts mobile number only."""
     user = crud_user.get_user_by_identifier(form_data.mobile_number)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email/phone",
+            detail="Incorrect mobile number",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
