@@ -8,7 +8,7 @@ BASE_URL = "http://localhost:8000/api/v1"
 def test_login(identifier, password, label):
     print(f"\nTesting {label} login...")
     data = {
-        "email_or_phone": identifier,
+        "mobile_number": identifier,
         "password": password
     }
     try:

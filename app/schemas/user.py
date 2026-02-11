@@ -27,5 +27,5 @@ class User(UserBase):
         from_attributes = True
 
 class UserLogin(BaseModel):
-    email_or_phone: str
+    mobile_number: str
     password: str

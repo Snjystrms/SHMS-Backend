@@ -6,7 +6,7 @@ from app.core import security
 
 router = APIRouter()
 
-@router.post("/create-officer", status_code=status.HTTP_201_CREATED)
+@router.post("/officers", status_code=status.HTTP_201_CREATED)
 async def create_officer_account(
     user_data: UserCreate,
     current_admin: dict = Depends(deps.get_admin_user)

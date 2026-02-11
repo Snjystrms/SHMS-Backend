@@ -9,7 +9,7 @@ def test_officer_crud():
     # 1. Login as Admin
     print("\n1. Logging in as Admin...")
     login_data = {
-        "email_or_phone": "admin@example.com",
+        "mobile_number": "admin@example.com",
         "password": "admin123"
     }
     response = requests.post(f"{BASE_URL}/login", data=login_data)
@@ -31,7 +31,7 @@ def test_officer_crud():
         "password": "password123"
     }
     response = requests.post(
-        f"{BASE_URL}/admin/create-officer", 
+        f"{BASE_URL}/admin/officers", 
         json=officer_data, 
         headers=headers
     )
