@@ -184,12 +184,6 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         }
     }
 
-@app.get("/me")
-async def get_me(current_user: dict = Depends(get_admin_user)):
-    """Get current logged in admin details."""
-    return current_user
-
-
 @app.post("/admin/create-officer", status_code=status.HTTP_201_CREATED)
 async def create_officer_account(
     user_data: UserCreate,

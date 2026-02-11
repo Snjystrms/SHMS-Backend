@@ -30,15 +30,6 @@ def test_login_failure():
     print(f"Status: {response.status_code}")
     print(f"Response: {json.dumps(response.json(), indent=2)}")
 
-def test_me_endpoint(token):
-    print("\nTesting /me endpoint with token...")
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
-    response = requests.get(f"{BASE_URL}/me", headers=headers)
-    print(f"Status: {response.status_code}")
-    print(f"Response: {json.dumps(response.json(), indent=2)}")
-
 if __name__ == "__main__":
     try:
         test_login_success()
