@@ -7,7 +7,12 @@ def get_user_by_email(email: str):
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT id, name, email, password, role_id FROM users WHERE email = %s AND deleted_at IS NULL",
+            """
+            SELECT u.id, u.name, u.email, u.password, u.role_id, r.name as role_name 
+            FROM users u
+            LEFT JOIN roles r ON u.role_id = r.id
+            WHERE u.email = %s AND u.deleted_at IS NULL
+            """,
             (email,)
         )
         row = cur.fetchone()
@@ -17,7 +22,8 @@ def get_user_by_email(email: str):
                 "name": row[1],
                 "email": row[2],
                 "password": row[3],
-                "role_id": row[4]
+                "role_id": row[4],
+                "role": row[5]
             }
         return None
     except Exception as e:

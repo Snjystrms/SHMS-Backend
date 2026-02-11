@@ -169,7 +169,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
 
     access_token_expires = timedelta(minutes=60 * 24)
     access_token = create_access_token(
-        data={"sub": user["id"], "role": "admin"}, # In a real app, fetch role name
+        data={"sub": user["id"], "role": user["role"]},
         expires_delta=access_token_expires
     )
     
@@ -179,7 +179,8 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         "user": {
             "id": user["id"],
             "name": user["name"],
-            "email": user["email"]
+            "email": user["email"],
+            "role": user["role"]
         }
     }
 
