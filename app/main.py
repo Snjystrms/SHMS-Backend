@@ -5,6 +5,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from app.auth import create_access_token, verify_password, get_password_hash, get_admin_user
 from app.user_service import get_user_by_email, update_user_password, get_role_id_by_name, create_user
 from app.models import UserCreate
+from app.utils import get_local_ip
 from datetime import timedelta
 
 app = FastAPI()
@@ -16,6 +17,21 @@ app.add_middleware(
     allow_methods=["*"],        # GET, POST, PUT, DELETE
     allow_headers=["*"],        # Content-Type, Authorization, etc.
 )
+
+@app.on_event("startup")
+async def startup_event():
+    local_ip = get_local_ip()
+    print("\n" + "="*50)
+    print(f"🚀 SERVER IS RUNNING!")
+    print(f"🔗 Local link:    http://127.0.0.1:8000")
+    print(f"👥 Network link:  http://{local_ip}:8000")
+    print(f"📜 API Docs:      http://{local_ip}:8000/docs")
+    print("="*50 + "\n")
+    
+    if local_ip == "127.0.0.1":
+        print("⚠️  Warning: Could not detect local network IP.")
+    else:
+        print(f"💡 Share 'http://{local_ip}:8000' with your colleagues.")
 
 @app.post("/identify")
 async def identify_face(file: UploadFile = File(...)):
