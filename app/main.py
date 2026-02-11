@@ -3,12 +3,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.utils import get_local_ip
+from app.core.exceptions import (
+    AppException, 
+    app_exception_handler, 
+    http_exception_handler
+)
+from fastapi import HTTPException
 
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
+
+# Register exception handlers
+app.add_exception_handler(AppException, app_exception_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
 
 # Set all CORS enabled origins
 app.add_middleware(
