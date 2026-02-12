@@ -39,3 +39,14 @@ def get_admin_user(current_user: Dict = Depends(get_current_user)) -> Dict:
             detail="The user doesn't have enough privileges",
         )
     return current_user
+
+def get_admin_or_officer_user(
+    current_user: Dict = Depends(get_current_user),
+) -> Dict:
+    role = current_user.get("role")
+    if role not in ["admin", "officer"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The user doesn't have enough privileges"
+        )
+    return current_user

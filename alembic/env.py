@@ -5,6 +5,10 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from dotenv import load_dotenv
 
+# Add project root to python path to allow importing 'app'
+import sys
+sys.path.append(os.getcwd())
+
 
 # Load .env so Alembic sees the same DB settings as the app.
 load_dotenv(override=True)
