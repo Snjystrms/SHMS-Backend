@@ -26,7 +26,17 @@ class Settings(BaseSettings):
     # FACE
     FACE_MATCH_THRESHOLD: float = 0.40
     FACE_DUPLICATE_THRESHOLD: float = 0.30
-    
+
+    # SMS (forgot password OTP). Provider: mock | twilio | msg91 | fast2sms
+    SMS_PROVIDER: str = "mock"
+    SMS_OTP_EXPIRE_MINUTES: int = 2
+    TWILIO_ACCOUNT_SID: Optional[str] = None
+    TWILIO_AUTH_TOKEN: Optional[str] = None
+    TWILIO_PHONE: Optional[str] = None
+    MSG91_AUTH_KEY: Optional[str] = None
+    MSG91_SENDER_ID: Optional[str] = None
+    FAST2SMS_API_KEY: Optional[str] = None
+
     model_config = SettingsConfigDict(
         env_file=".env", 
         case_sensitive=True,

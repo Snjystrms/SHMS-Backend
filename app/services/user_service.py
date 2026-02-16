@@ -1,5 +1,8 @@
 import uuid
-from typing import Optional, List, Dict, Any
+import random
+import string
+from datetime import datetime, timedelta, timezone
+from typing import Optional, List, Dict, Any, Tuple
 from app.schemas.user import UserCreate, UserUpdate
 from app.db.session import get_db_connection
 
@@ -243,3 +246,94 @@ def delete_user(user_id: str):
     finally:
         cur.close()
         conn.close()
+
+
+def get_officer_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+    """Fetch port officer by phone. Returns None if not found or not officer."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT u.id, u.name, u.email, u.phone
+            FROM users u
+            JOIN roles r ON u.role_id = r.id
+            WHERE u.phone = %s AND r.name = 'officer' AND u.deleted_at IS NULL
+            """,
+            (phone.strip(),)
+        )
+        row = cur.fetchone()
+        if row:
+            return {"id": str(row[0]), "name": row[1], "email": row[2], "phone": row[3]}
+        return None
+    except Exception as e:
+        print(f"Error fetching officer by phone: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _generate_otp(length: int = 4) -> str:
+    return "".join(random.choices(string.digits, k=length))
+
+
+def create_and_store_otp(phone: str, expire_minutes: int = 2) -> Tuple[Optional[str], bool]:
+    """Create OTP, store in DB, return (otp, success). Invalidates previous OTP for phone."""
+    otp = _generate_otp(4)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=expire_minutes)
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM password_reset_otps WHERE phone = %s",
+            (phone.strip(),)
+        )
+        cur.execute(
+            "INSERT INTO password_reset_otps (phone, otp, expires_at) VALUES (%s, %s, %s)",
+            (phone.strip(), otp, expires_at)
+        )
+        conn.commit()
+        return otp, True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error storing OTP: {e}")
+        return None, False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def verify_otp(phone: str, otp: str) -> bool:
+    """Verify OTP for phone. Returns True if valid and unused. Marks OTP as used on success."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id FROM password_reset_otps
+            WHERE phone = %s AND otp = %s AND used_at IS NULL AND expires_at > NOW()
+            """,
+            (phone.strip(), otp.strip())
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+        cur.execute("UPDATE password_reset_otps SET used_at = NOW() WHERE id = %s", (row[0],))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error verifying OTP: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def mask_mobile(phone: str) -> str:
+    """Return masked mobile like XXXX-XX1234."""
+    p = phone.replace(" ", "").replace("-", "")
+    if len(p) < 4:
+        return "XXXX"
+    return f"XXXX-XX{p[-4:]}"

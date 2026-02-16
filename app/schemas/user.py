@@ -29,3 +29,18 @@ class User(UserBase):
 class UserLogin(BaseModel):
     mobile_number: str
     password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    mobile_number: str
+
+
+class ResendOtpRequest(BaseModel):
+    mobile_number: str
+
+
+class ResetPasswordRequest(BaseModel):
+    mobile_number: str
+    otp: str
+    new_password: str
+    confirm_password: str
