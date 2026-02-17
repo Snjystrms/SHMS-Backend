@@ -421,3 +421,165 @@ def mask_mobile(phone: str) -> str:
     if len(p) < 4:
         return "XXXX"
     return f"XXXX-XX{p[-4:]}"
+
+
+# ----- Boat CRUD (boats table) -----
+def _boat_from_row(row) -> Dict[str, Any]:
+    """Map boats table row to dict. Columns: id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at, deleted_at."""
+    boat_document = row[3]
+    # Normalize stored paths so they are clickable/openable in clients (Swagger, browser)
+    if boat_document and not str(boat_document).startswith(("http://", "https://", "/")):
+        boat_document = f"/{boat_document}"
+    return {
+        "id": str(row[0]),
+        "boat_owner_id": str(row[1]),
+        "boat_number": row[2],
+        "boat_document": boat_document,
+        "boat_document_content_type": row[4],
+        "boat_document_filename": row[5],
+        "created_at": row[6],
+        "updated_at": row[7],
+    }
+
+
+def get_boats_by_owner_id(boat_owner_id: str) -> List[Dict[str, Any]]:
+    """List boats for one owner (excludes soft-deleted)."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
+            FROM boats WHERE boat_owner_id = %s AND deleted_at IS NULL ORDER BY created_at DESC
+            """,
+            (boat_owner_id,),
+        )
+        return [_boat_from_row(r) for r in cur.fetchall()]
+    except Exception as e:
+        print(f"Error fetching boats by owner: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_all_boats(boat_owner_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List all boats (admin). Optionally filter by boat_owner_id."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        if boat_owner_id:
+            cur.execute(
+                """
+                SELECT id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
+                FROM boats WHERE boat_owner_id = %s AND deleted_at IS NULL ORDER BY created_at DESC
+                """,
+                (boat_owner_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
+                FROM boats WHERE deleted_at IS NULL ORDER BY created_at DESC
+                """
+            )
+        return [_boat_from_row(r) for r in cur.fetchall()]
+    except Exception as e:
+        print(f"Error fetching boats: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_boat_by_id(boat_id: str) -> Optional[Dict[str, Any]]:
+    """Get one boat by id. Returns None if not found or soft-deleted."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
+            FROM boats WHERE id = %s AND deleted_at IS NULL
+            """,
+            (boat_id,),
+        )
+        row = cur.fetchone()
+        return _boat_from_row(row) if row else None
+    except Exception as e:
+        print(f"Error fetching boat by id: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def create_boat(boat_owner_id: str, data: dict) -> Optional[str]:
+    """Create a boat. Returns boat id or None."""
+    boat_id = str(uuid.uuid4())
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO boats (id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (
+                boat_id,
+                boat_owner_id,
+                data.get("boat_number", "").strip(),
+                data.get("boat_document"),
+                data.get("boat_document_content_type"),
+                data.get("boat_document_filename"),
+            ),
+        )
+        conn.commit()
+        return boat_id
+    except Exception as e:
+        conn.rollback()
+        print(f"Error creating boat: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_boat(boat_id: str, data: dict) -> bool:
+    """Update boat. Only updates provided fields."""
+    allowed = {"boat_number", "boat_document", "boat_document_content_type", "boat_document_filename"}
+    updates = {k: v for k, v in data.items() if k in allowed and v is not None}
+    if not updates:
+        return True
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        set_clause = ", ".join(f"{k} = %s" for k in updates)
+        params = list(updates.values()) + [boat_id]
+        cur.execute(f"UPDATE boats SET {set_clause}, updated_at = NOW() WHERE id = %s AND deleted_at IS NULL", tuple(params))
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        conn.rollback()
+        print(f"Error updating boat: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def delete_boat(boat_id: str) -> bool:
+    """Soft delete a boat."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE boats SET deleted_at = NOW() WHERE id = %s AND deleted_at IS NULL", (boat_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        conn.rollback()
+        print(f"Error deleting boat: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()

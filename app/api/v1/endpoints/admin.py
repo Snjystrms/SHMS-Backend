@@ -1,6 +1,7 @@
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.services import user_service as crud_user
-from app.schemas.user import UserCreate, UserUpdate
+from app.schemas.user import UserCreate, UserUpdate, BoatUpdate
 from app.api import deps
 from app.core import security
 
@@ -182,4 +183,53 @@ async def delete_boat_owner(boat_owner_id: str, current_admin: dict = Depends(de
         )
     
     return {"success": True, "message": "Boat owner deleted successfully"}
+
+
+# ==================== Boat CRUD (admin) ====================
+
+@router.get("/boats")
+async def list_boats(
+    boat_owner_id: Optional[str] = None,
+    current_admin: dict = Depends(deps.get_admin_user),
+):
+    """List all boats. Optionally filter by boat_owner_id."""
+    boats = crud_user.get_all_boats(boat_owner_id=boat_owner_id)
+    return {"success": True, "boats": boats}
+
+
+@router.get("/boats/{boat_id}")
+async def get_boat(boat_id: str, current_admin: dict = Depends(deps.get_admin_user)):
+    """Get a boat by id."""
+    boat = crud_user.get_boat_by_id(boat_id)
+    if not boat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
+    return {"success": True, "boat": boat}
+
+
+@router.put("/boats/{boat_id}")
+async def update_boat(
+    boat_id: str,
+    data: BoatUpdate,
+    current_admin: dict = Depends(deps.get_admin_user),
+):
+    """Update a boat."""
+    boat = crud_user.get_boat_by_id(boat_id)
+    if not boat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
+    ok = crud_user.update_boat(boat_id, data.dict(exclude_unset=True))
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update boat")
+    return {"success": True, "boat": crud_user.get_boat_by_id(boat_id)}
+
+
+@router.delete("/boats/{boat_id}")
+async def delete_boat(boat_id: str, current_admin: dict = Depends(deps.get_admin_user)):
+    """Soft delete a boat."""
+    boat = crud_user.get_boat_by_id(boat_id)
+    if not boat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
+    ok = crud_user.delete_boat(boat_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete boat")
+    return {"success": True, "message": "Boat deleted"}
 

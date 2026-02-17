@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.utils import get_local_ip
@@ -15,6 +16,9 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
+
+# Serve uploaded files (boat documents) from /uploads/...
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Register exception handlers
 app.add_exception_handler(AppException, app_exception_handler)

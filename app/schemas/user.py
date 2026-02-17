@@ -58,3 +58,18 @@ class BoatOwnerVerifyOtpRequest(BaseModel):
     """Request body for boat owner OTP verification (login)."""
     mobile_number: str
     otp: str
+
+
+# ----- Boat (owned by boat_owner) -----
+class BoatCreate(BaseModel):
+    boat_number: str
+    boat_document: Optional[str] = None
+    boat_document_content_type: Optional[str] = None
+    boat_document_filename: Optional[str] = None
+
+
+class BoatUpdate(BaseModel):
+    boat_number: Optional[str] = None
+    boat_document: Optional[str] = None
+    boat_document_content_type: Optional[str] = None
+    boat_document_filename: Optional[str] = None

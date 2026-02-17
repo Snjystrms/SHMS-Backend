@@ -1,12 +1,14 @@
-"""Boat owner registration and OTP login. Separate from main auth (officer/admin)."""
+"""Boat owner registration, OTP login, and boat CRUD (own boats only)."""
 from datetime import timedelta
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, status, UploadFile
 from app.core import security
 from app.core.config import settings
 from app.services import user_service as crud_user
 from app.schemas.token import Token
-from app.schemas.user import BoatOwnerCreate, ForgotPasswordRequest, BoatOwnerVerifyOtpRequest
+from app.schemas.user import BoatOwnerCreate, BoatCreate, BoatUpdate, ForgotPasswordRequest, BoatOwnerVerifyOtpRequest
+from app.api import deps
 from app.utils.sms import get_sms_provider
+from app.utils.uploads import ALLOWED_BOAT_DOCUMENT_TYPES, save_boat_document
 
 router = APIRouter()
 
@@ -149,3 +151,94 @@ async def boat_owner_verify_otp(req: BoatOwnerVerifyOtpRequest):
     if not user:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User data not found")
     return _token_response(user)
+
+
+# ----- Boat CRUD (owner's own boats only) -----
+@router.get("/boats")
+async def list_my_boats(current_user: dict = Depends(deps.get_boat_owner_user)):
+    """List boats belonging to the authenticated boat owner."""
+    boats = crud_user.get_boats_by_owner_id(current_user["id"])
+    return {"success": True, "boats": boats}
+
+
+@router.post("/boats", status_code=status.HTTP_201_CREATED)
+async def create_boat(
+    boat_number: str = Form(..., description="Boat registration number"),
+    document: UploadFile = File(None, description="Boat document (PDF or image: JPEG/PNG), optional"),
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """Add a boat for the authenticated boat owner. Optionally upload a document (PDF or image)."""
+    data = {"boat_number": boat_number.strip(), "boat_document": None, "boat_document_content_type": None, "boat_document_filename": None}
+    boat_id = crud_user.create_boat(current_user["id"], data)
+    if not boat_id:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create boat")
+    if document and document.filename:
+        content = await document.read()
+        content_type = document.content_type or "application/octet-stream"
+        if content_type not in ALLOWED_BOAT_DOCUMENT_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Document must be PDF or image (JPEG/PNG). Got: {content_type}",
+            )
+        result = save_boat_document(boat_id, content, content_type, document.filename)
+        if result:
+            path, ct, name = result
+            crud_user.update_boat(boat_id, {"boat_document": path, "boat_document_content_type": ct, "boat_document_filename": name})
+    boat = crud_user.get_boat_by_id(boat_id)
+    return {"success": True, "boat": boat}
+
+
+@router.get("/boats/{boat_id}")
+async def get_my_boat(boat_id: str, current_user: dict = Depends(deps.get_boat_owner_user)):
+    """Get one boat; must belong to the authenticated boat owner."""
+    boat = crud_user.get_boat_by_id(boat_id)
+    if not boat or boat["boat_owner_id"] != current_user["id"]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
+    return {"success": True, "boat": boat}
+
+
+@router.put("/boats/{boat_id}")
+async def update_my_boat(
+    boat_id: str,
+    boat_number: str = Form(None, description="Boat registration number (optional)"),
+    document: UploadFile = File(None, description="Replace boat document with PDF or image (optional)"),
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """Update a boat; must belong to the authenticated boat owner. Optionally upload a new document."""
+    boat = crud_user.get_boat_by_id(boat_id)
+    if not boat or boat["boat_owner_id"] != current_user["id"]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
+    update_dict = {}
+    if boat_number is not None and boat_number.strip():
+        update_dict["boat_number"] = boat_number.strip()
+    if document and document.filename:
+        content = await document.read()
+        content_type = document.content_type or "application/octet-stream"
+        if content_type not in ALLOWED_BOAT_DOCUMENT_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Document must be PDF or image (JPEG/PNG). Got: {content_type}",
+            )
+        result = save_boat_document(boat_id, content, content_type, document.filename)
+        if result:
+            path, ct, name = result
+            update_dict["boat_document"] = path
+            update_dict["boat_document_content_type"] = ct
+            update_dict["boat_document_filename"] = name
+    if update_dict:
+        ok = crud_user.update_boat(boat_id, update_dict)
+        if not ok:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update boat")
+    return {"success": True, "boat": crud_user.get_boat_by_id(boat_id)}
+
+
+@router.delete("/boats/{boat_id}")
+async def delete_my_boat(boat_id: str, current_user: dict = Depends(deps.get_boat_owner_user)):
+    """Soft delete a boat; must belong to the authenticated boat owner."""
+    boat = crud_user.get_boat_by_id(boat_id)
+    if not boat or boat["boat_owner_id"] != current_user["id"]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
+    ok = crud_user.delete_boat(boat_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete boat")
+    return {"success": True, "message": "Boat deleted"}
