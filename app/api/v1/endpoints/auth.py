@@ -1,10 +1,11 @@
 from datetime import timedelta
+from typing import Callable, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Form
 from app.core import security
 from app.core.config import settings
 from app.services import user_service as crud_user
 from app.schemas.token import Token
-from app.schemas.user import UserCreate, ForgotPasswordRequest, ResendOtpRequest, ResetPasswordRequest
+from app.schemas.user import ForgotPasswordRequest, ResendOtpRequest, ResetPasswordRequest
 from app.utils.sms import get_sms_provider
 
 router = APIRouter()
@@ -20,6 +21,39 @@ def _get_sms():
         msg91_sender_id=settings.MSG91_SENDER_ID or "",
         fast2sms_api_key=settings.FAST2SMS_API_KEY or "",
     )
+
+
+def _send_otp_for_phone(phone: str, get_user_by_phone: Callable[[str], Optional[dict]], not_found_detail: str):
+    """Shared: ensure user exists, create/store OTP, send SMS. Raises HTTPException on failure."""
+    user = get_user_by_phone(phone)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=not_found_detail)
+    otp, ok = crud_user.create_and_store_otp(phone, settings.SMS_OTP_EXPIRE_MINUTES)
+    if not ok or not otp:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to generate OTP")
+    sms = _get_sms()
+    if not sms.send_otp(phone, otp):
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to send OTP")
+    return {"masked_mobile": crud_user.mask_mobile(phone), "expires_in_minutes": settings.SMS_OTP_EXPIRE_MINUTES}
+
+
+def _token_response(user: dict):
+    """Build Token response from user dict (id, name, email, role)."""
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = security.create_access_token(
+        subject=user["id"],
+        expires_delta=access_token_expires,
+    )
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "email": user.get("email") or "",
+            "role": user["role"],
+        },
+    }
 
 class LoginRequestForm:
     def __init__(
@@ -69,91 +103,22 @@ async def login(form_data: LoginRequestForm = Depends()):
         hashed = security.get_password_hash(form_data.password)
         crud_user.update_user_password(user["id"], hashed)
 
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = security.create_access_token(
-        subject=user["id"],
-        expires_delta=access_token_expires
-    )
-    
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": {
-            "id": user["id"],
-            "name": user["name"],
-            "email": user["email"],
-            "role": user["role"]
-        }
-    }
-
-@router.post("/boat-owners/register", status_code=status.HTTP_201_CREATED)
-async def register_boat_owner(user_data: UserCreate):
-    """
-    Public registration endpoint for boat owners.
-    """
-    # Check if user already exists
-    existing_user = crud_user.get_user_by_identifier(user_data.email)
-    if not existing_user:
-        existing_user = crud_user.get_user_by_identifier(user_data.phone)
-        
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="User with this email or phone already exists"
-        )
-    
-    # Get boat_owner role ID
-    role_id = crud_user.get_role_id_by_name("boat_owner")
-    if not role_id:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Boat owner role not found in database"
-        )
-    
-    # Hash password
-    hashed_password = security.get_password_hash(user_data.password)
-    
-    # Create user
-    new_user_dict = user_data.dict()
-    new_user_dict["password"] = hashed_password
-    
-    user_id = crud_user.create_user(new_user_dict, role_id)
-    
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to register boat owner"
-        )
-    
-    return {
-        "success": True,
-        "user_id": user_id,
-        "message": "Boat owner registered successfully"
-    }
+    return _token_response(user)
 
 
 @router.post("/forgot-password")
 async def forgot_password(req: ForgotPasswordRequest):
     """Send OTP to port officer's mobile. Officer-only."""
-    phone = req.mobile_number.strip()
-    officer = crud_user.get_officer_by_phone(phone)
-    if not officer:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No port officer found with this mobile number",
-        )
-    otp, ok = crud_user.create_and_store_otp(phone, settings.SMS_OTP_EXPIRE_MINUTES)
-    if not ok or not otp:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to generate OTP")
-    sms = _get_sms()
-    if not sms.send_otp(phone, otp):
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to send OTP")
-    return {"masked_mobile": crud_user.mask_mobile(phone), "expires_in_minutes": settings.SMS_OTP_EXPIRE_MINUTES}
+    return _send_otp_for_phone(
+        req.mobile_number.strip(),
+        crud_user.get_officer_by_phone,
+        "No port officer found with this mobile number",
+    )
 
 
 @router.post("/resend-otp")
 async def resend_otp(req: ResendOtpRequest):
-    """Resend OTP to port officer's mobile."""
+    """Resend OTP to port officer's mobile. Same body as forgot-password (mobile_number)."""
     return await forgot_password(ForgotPasswordRequest(mobile_number=req.mobile_number))
 
 

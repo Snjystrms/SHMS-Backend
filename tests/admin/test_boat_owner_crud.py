@@ -1,8 +1,30 @@
+import os
+import sys
 import requests
 import json
-import uuid
+
+# Allow importing app when running test as script
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 BASE_URL = "http://localhost:8000/api/v1"
+
+
+def _get_otp_for_phone(phone: str) -> str | None:
+    """Test helper: read latest OTP for phone from DB."""
+    try:
+        from app.db.session import get_db_connection
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT otp FROM password_reset_otps WHERE phone = %s ORDER BY created_at DESC LIMIT 1",
+            (phone.strip(),),
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
 
 
 def test_boat_owner_crud():
@@ -21,25 +43,30 @@ def test_boat_owner_crud():
     headers = {"Authorization": f"Bearer {token}"}
     print("✅ Admin login successful")
 
-    # 2. Register a Test Boat Owner
+    # 2. Register (saved to temp_users; OTP sent)
     print("\n2. Registering a test boat owner...")
-    boat_owner_email = f"test_boat_owner_{uuid.uuid4().hex[:6]}@example.com"
-    boat_owner_data = {
-        "name": "Test Boat Owner",
-        "email": boat_owner_email,
-        "phone": "9876543210",
-        "password": "password123"
-    }
-    response = requests.post(
-        f"{BASE_URL}/boat-owners/register", 
-        json=boat_owner_data
-    )
+    phone = "9876543210"
+    boat_owner_data = {"name": "Test Boat Owner", "phone": phone}
+    response = requests.post(f"{BASE_URL}/boat-owners/register", json=boat_owner_data)
     if response.status_code != 201:
         print(f"❌ Failed to register boat owner: {response.text}")
         return
-    
-    boat_owner_id = response.json()["user_id"]
-    print(f"✅ Boat owner registered with ID: {boat_owner_id}")
+    print("✅ Registration accepted; OTP sent")
+
+    # 2b. Verify OTP to create user (user is created only after verify)
+    otp = _get_otp_for_phone(phone)
+    if not otp:
+        print("❌ Could not get OTP from DB for verify step (run with app env)")
+        return
+    response = requests.post(
+        f"{BASE_URL}/boat-owners/login/verify",
+        json={"mobile_number": phone, "otp": otp},
+    )
+    if response.status_code != 200:
+        print(f"❌ Failed to verify OTP: {response.text}")
+        return
+    boat_owner_id = response.json()["user"]["id"]
+    print(f"✅ Boat owner verified and created with ID: {boat_owner_id}")
 
     # 3. List all boat owners
     print("\n3. Listing all boat owners...")

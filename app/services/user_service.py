@@ -80,15 +80,14 @@ def create_user(user_data: dict, role_id: int):
     try:
         cur.execute(
             """
-            INSERT INTO users (id, name, email, phone, password, role_id, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+            INSERT INTO users (id, name, email, phone, role_id, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
             """,
             (
                 user_id,
                 user_data["name"],
-                user_data["email"],
+                user_data.get("email") or None,
                 user_data["phone"],
-                user_data["password"],
                 role_id
             )
         )
@@ -268,6 +267,91 @@ def get_officer_by_phone(phone: str) -> Optional[Dict[str, Any]]:
         return None
     except Exception as e:
         print(f"Error fetching officer by phone: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def create_temp_user(name: str, phone: str) -> bool:
+    """Store pending boat owner in temp_users (before OTP verify). Replaces existing row for same phone."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM temp_users WHERE phone = %s", (phone.strip(),))
+        cur.execute(
+            "INSERT INTO temp_users (id, name, phone) VALUES (%s, %s, %s)",
+            (str(uuid.uuid4()), name.strip(), phone.strip()),
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error creating temp user: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_temp_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+    """Fetch temp user (pending registration) by phone. Returns None if not found."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT id, name, phone FROM temp_users WHERE phone = %s",
+            (phone.strip(),),
+        )
+        row = cur.fetchone()
+        if row:
+            return {"id": str(row[0]), "name": row[1], "phone": row[2]}
+        return None
+    except Exception as e:
+        print(f"Error fetching temp user by phone: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def delete_temp_user_by_phone(phone: str) -> bool:
+    """Remove temp user after successful registration."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM temp_users WHERE phone = %s", (phone.strip(),))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error deleting temp user: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_boat_owner_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+    """Fetch boat owner by phone. Returns None if not found or not boat_owner role."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT u.id, u.name, u.email, u.phone
+            FROM users u
+            JOIN roles r ON u.role_id = r.id
+            WHERE u.phone = %s AND r.name = 'boat_owner' AND u.deleted_at IS NULL
+            """,
+            (phone.strip(),)
+        )
+        row = cur.fetchone()
+        if row:
+            return {"id": str(row[0]), "name": row[1], "email": row[2], "phone": row[3]}
+        return None
+    except Exception as e:
+        print(f"Error fetching boat owner by phone: {e}")
         return None
     finally:
         cur.close()
