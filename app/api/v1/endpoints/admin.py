@@ -36,7 +36,7 @@ async def create_officer_account(
     new_user_dict = user_data.dict()
     new_user_dict["password"] = hashed_password
     
-    user_id = crud_user.create_user(new_user_dict, role_id)
+    user_id = crud_user.create_officer_user(new_user_dict, role_id)
     
     if not user_id:
         raise HTTPException(

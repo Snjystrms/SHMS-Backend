@@ -101,6 +101,36 @@ def create_user(user_data: dict, role_id: int):
         cur.close()
         conn.close()
 
+def create_officer_user(user_data: dict, role_id: int):
+    """Create a new user in the database."""
+    user_id = str(uuid.uuid4())
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO users (id, name, email, phone, password, role_id, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+            """,
+            (
+                user_id,
+                user_data["name"],
+                user_data.get("email") or None,
+                user_data["phone"],
+                user_data["password"],
+                role_id
+            )
+        )
+        conn.commit()
+        return user_id
+    except Exception as e:
+        conn.rollback()
+        print(f"Error creating user: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
 def get_officers():
     """Fetch all users with the 'officer' role."""
     conn = get_db_connection()
