@@ -418,6 +418,24 @@ def create_and_store_otp(phone: str, expire_minutes: int = 2) -> Tuple[Optional[
         conn.close()
 
 
+def check_otp(phone: str, otp: str) -> bool:
+    """Check if OTP is valid and unused for phone. Does not mark as used (for verify step before reset)."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id FROM password_reset_otps
+            WHERE phone = %s AND otp = %s AND used_at IS NULL AND expires_at > NOW()
+            """,
+            (phone.strip(), otp.strip())
+        )
+        return cur.fetchone() is not None
+    finally:
+        cur.close()
+        conn.close()
+
+
 def verify_otp(phone: str, otp: str) -> bool:
     """Verify OTP for phone. Returns True if valid and unused. Marks OTP as used on success."""
     conn = get_db_connection()

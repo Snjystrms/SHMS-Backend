@@ -1,40 +1,15 @@
 from datetime import timedelta
-from typing import Callable, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Form
 from app.core import security
 from app.core.config import settings
 from app.services import user_service as crud_user
 from app.schemas.token import Token
-from app.schemas.user import ForgotPasswordRequest, ResendOtpRequest, ResetPasswordRequest
-from app.utils.sms import get_sms_provider
+from app.schemas.user import ForgotPasswordRequest, ResetPasswordRequest, VerifyResetOtpRequest
+from app.utils.otp_helpers import send_otp_for_phone
 
 router = APIRouter()
 
-
-def _get_sms():
-    return get_sms_provider(
-        settings.SMS_PROVIDER,
-        twilio_account_sid=settings.TWILIO_ACCOUNT_SID or "",
-        twilio_auth_token=settings.TWILIO_AUTH_TOKEN or "",
-        twilio_phone=settings.TWILIO_PHONE or "",
-        msg91_auth_key=settings.MSG91_AUTH_KEY or "",
-        msg91_sender_id=settings.MSG91_SENDER_ID or "",
-        fast2sms_api_key=settings.FAST2SMS_API_KEY or "",
-    )
-
-
-def _send_otp_for_phone(phone: str, get_user_by_phone: Callable[[str], Optional[dict]], not_found_detail: str):
-    """Shared: ensure user exists, create/store OTP, send SMS. Raises HTTPException on failure."""
-    user = get_user_by_phone(phone)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=not_found_detail)
-    otp, ok = crud_user.create_and_store_otp(phone, settings.SMS_OTP_EXPIRE_MINUTES)
-    if not ok or not otp:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to generate OTP")
-    sms = _get_sms()
-    if not sms.send_otp(phone, otp):
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to send OTP")
-    return {"masked_mobile": crud_user.mask_mobile(phone), "expires_in_minutes": settings.SMS_OTP_EXPIRE_MINUTES}
+OFFICER_NOT_FOUND_DETAIL = "No port officer found with this mobile number"
 
 
 def _token_response(user: dict):
@@ -99,7 +74,8 @@ async def login(form_data: LoginRequestForm = Depends()):
         )
     
     # Optional: Automatically hash plain text password on first login
-    if not user["password"].startswith("$2b$") and not user["password"].startswith("$2a$"):
+    stored = user.get("password")
+    if stored and not stored.startswith("$2b$") and not stored.startswith("$2a$"):
         hashed = security.get_password_hash(form_data.password)
         crud_user.update_user_password(user["id"], hashed)
 
@@ -109,32 +85,45 @@ async def login(form_data: LoginRequestForm = Depends()):
 @router.post("/forgot-password")
 async def forgot_password(req: ForgotPasswordRequest):
     """Send OTP to port officer's mobile. Officer-only."""
-    return _send_otp_for_phone(
+    return send_otp_for_phone(
         req.mobile_number.strip(),
         crud_user.get_officer_by_phone,
-        "No port officer found with this mobile number",
+        OFFICER_NOT_FOUND_DETAIL,
     )
 
 
-@router.post("/resend-otp")
-async def resend_otp(req: ResendOtpRequest):
-    """Resend OTP to port officer's mobile. Same body as forgot-password (mobile_number)."""
-    return await forgot_password(ForgotPasswordRequest(mobile_number=req.mobile_number))
+@router.post("/verify-reset-otp")
+async def verify_reset_otp(req: VerifyResetOtpRequest):
+    """Verify OTP for port officer password reset. Officer-only. Returns reset_token for reset-password."""
+    phone = req.mobile_number.strip()
+    officer = crud_user.get_officer_by_phone(phone)
+    if not officer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=OFFICER_NOT_FOUND_DETAIL,
+        )
+    if not crud_user.verify_otp(phone, req.otp):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired OTP",
+        )
+    reset_token = security.create_password_reset_token(officer["id"])
+    return {"message": "OTP verified. Proceed to reset password.", "reset_token": reset_token}
 
 
 @router.post("/reset-password")
 async def reset_password(req: ResetPasswordRequest):
-    """Verify OTP and set new password. Officer-only."""
-    phone = req.mobile_number.strip()
+    """Set new password using reset_token from verify-reset-otp. Officer-only."""
     if req.new_password != req.confirm_password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match")
     if len(req.new_password) < 6:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Minimum 6 characters required")
-    officer = crud_user.get_officer_by_phone(phone)
-    if not officer:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No port officer found with this mobile number")
-    if not crud_user.verify_otp(phone, req.otp):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP")
+    user_id = security.decode_password_reset_token(req.reset_token)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token. Please verify OTP again.",
+        )
     hashed = security.get_password_hash(req.new_password)
-    crud_user.update_user_password(officer["id"], hashed)
+    crud_user.update_user_password(user_id, hashed)
     return {"message": "Password reset successfully"}

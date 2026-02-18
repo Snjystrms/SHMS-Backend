@@ -7,22 +7,12 @@ from app.services import user_service as crud_user
 from app.schemas.token import Token
 from app.schemas.user import BoatOwnerCreate, BoatCreate, BoatUpdate, ForgotPasswordRequest, BoatOwnerVerifyOtpRequest
 from app.api import deps
-from app.utils.sms import get_sms_provider
+from app.utils.otp_helpers import get_sms, send_otp_for_phone
 from app.utils.uploads import ALLOWED_BOAT_DOCUMENT_TYPES, save_boat_document
 
 router = APIRouter()
 
-
-def _get_sms():
-    return get_sms_provider(
-        settings.SMS_PROVIDER,
-        twilio_account_sid=settings.TWILIO_ACCOUNT_SID or "",
-        twilio_auth_token=settings.TWILIO_AUTH_TOKEN or "",
-        twilio_phone=settings.TWILIO_PHONE or "",
-        msg91_auth_key=settings.MSG91_AUTH_KEY or "",
-        msg91_sender_id=settings.MSG91_SENDER_ID or "",
-        fast2sms_api_key=settings.FAST2SMS_API_KEY or "",
-    )
+BOAT_OWNER_NOT_FOUND_DETAIL = "No boat owner found with this mobile number"
 
 
 def _token_response(user: dict):
@@ -67,7 +57,7 @@ async def register_boat_owner(user_data: BoatOwnerCreate):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to generate OTP",
         )
-    sms = _get_sms()
+    sms = get_sms()
     if not sms.send_otp(phone, otp):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -84,35 +74,11 @@ async def register_boat_owner(user_data: BoatOwnerCreate):
 @router.post("/login/send-otp")
 async def boat_owner_send_otp(req: ForgotPasswordRequest):
     """Send OTP to boat owner's mobile for login. Boat owner must already exist."""
-    phone = req.mobile_number.strip()
-    owner = crud_user.get_boat_owner_by_phone(phone)
-    if not owner:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No boat owner found with this mobile number",
-        )
-    otp, ok = crud_user.create_and_store_otp(phone, settings.SMS_OTP_EXPIRE_MINUTES)
-    if not ok or not otp:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate OTP",
-        )
-    sms = _get_sms()
-    if not sms.send_otp(phone, otp):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to send OTP",
-        )
-    return {
-        "masked_mobile": crud_user.mask_mobile(phone),
-        "expires_in_minutes": settings.SMS_OTP_EXPIRE_MINUTES,
-    }
-
-
-@router.post("/login/resend-otp")
-async def boat_owner_resend_otp(req: ForgotPasswordRequest):
-    """Resend OTP to boat owner's mobile."""
-    return await boat_owner_send_otp(req)
+    return send_otp_for_phone(
+        req.mobile_number.strip(),
+        crud_user.get_boat_owner_by_phone,
+        BOAT_OWNER_NOT_FOUND_DETAIL,
+    )
 
 
 @router.post("/login/verify", response_model=Token)
@@ -145,7 +111,7 @@ async def boat_owner_verify_otp(req: BoatOwnerVerifyOtpRequest):
     if not owner:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No boat owner found with this mobile number",
+            detail=BOAT_OWNER_NOT_FOUND_DETAIL,
         )
     user = crud_user.get_user_by_id(owner["id"])
     if not user:
