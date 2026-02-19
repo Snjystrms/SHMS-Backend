@@ -43,17 +43,15 @@ class ForgotPasswordRequest(BaseModel):
     mobile_number: str
 
 
+# Same shape as ForgotPasswordRequest; kept for API clarity (resend-otp).
+ResendOtpRequest = ForgotPasswordRequest
+
+
 class ResetPasswordRequest(BaseModel):
-    """Request body for reset-password. Use reset_token from verify-reset-otp response."""
-    reset_token: str
-    new_password: str
-    confirm_password: str
-
-
-class VerifyResetOtpRequest(BaseModel):
-    """Request body for port officer password-reset OTP verification (verify only; use reset-password next)."""
     mobile_number: str
     otp: str
+    new_password: str
+    confirm_password: str
 
 
 class BoatOwnerVerifyOtpRequest(BaseModel):

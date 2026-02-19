@@ -4,6 +4,7 @@ from pydantic import BaseModel
 class CrewMemberBase(BaseModel):
     name: str
     aadhaar_number: Optional[str] = None
+    contact_number: Optional[str] = None
     emergency_contact_number: Optional[str] = None
 
 class CrewMemberCreate(CrewMemberBase):
@@ -12,6 +13,7 @@ class CrewMemberCreate(CrewMemberBase):
 class CrewMemberUpdate(BaseModel):
     name: Optional[str] = None
     aadhaar_number: Optional[str] = None
+    contact_number: Optional[str] = None
     emergency_contact_number: Optional[str] = None
 
 class CrewMemberResponse(CrewMemberBase):

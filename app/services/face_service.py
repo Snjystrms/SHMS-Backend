@@ -51,7 +51,7 @@ def find_match(embedding):
         cur.close()
         conn.close()
 
-def register_user(name, embedding, aadhaar_number=None, emergency_contact_number=None):
+def register_user(name, embedding, aadhaar_number=None, contact_number=None, emergency_contact_number=None):
     """Register a new crew member with an initial face embedding."""
     crew_member_id = str(uuid.uuid4())
     emb_id = str(uuid.uuid4())
@@ -60,8 +60,8 @@ def register_user(name, embedding, aadhaar_number=None, emergency_contact_number
     cur = conn.cursor()
     try:
         cur.execute(
-            "INSERT INTO crew_members (id, name, aadhaar_number, emergency_contact_number) VALUES (%s, %s, %s, %s)",
-            (crew_member_id, name, aadhaar_number, emergency_contact_number)
+            "INSERT INTO crew_members (id, name, aadhaar_number, phone, emergency_contact_number) VALUES (%s, %s, %s, %s, %s)",
+            (crew_member_id, name, aadhaar_number, contact_number, emergency_contact_number)
         )
         cur.execute(
             "INSERT INTO crew_face_embeddings (id, crew_member_id, embedding) VALUES (%s, %s, %s)",
@@ -119,7 +119,7 @@ def get_all_crew_members(skip=0, limit=100):
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT id, name, aadhaar_number, emergency_contact_number 
+            SELECT id, name, aadhaar_number, phone, emergency_contact_number 
             FROM crew_members 
             ORDER BY created_at DESC 
             OFFSET %s LIMIT %s
@@ -132,7 +132,8 @@ def get_all_crew_members(skip=0, limit=100):
                 "id": str(row[0]),
                 "name": row[1],
                 "aadhaar_number": row[2],
-                "emergency_contact_number": row[3]
+                "contact_number": row[3],
+                "emergency_contact_number": row[4]
             })
         return crew_members
     except Exception as e:
@@ -148,7 +149,7 @@ def get_crew_member_by_id(crew_member_id):
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT id, name, aadhaar_number, emergency_contact_number 
+            SELECT id, name, aadhaar_number, phone, emergency_contact_number 
             FROM crew_members 
             WHERE id = %s
         """, (crew_member_id,))
@@ -159,7 +160,8 @@ def get_crew_member_by_id(crew_member_id):
                 "id": str(row[0]),
                 "name": row[1],
                 "aadhaar_number": row[2],
-                "emergency_contact_number": row[3]
+                "contact_number": row[3],
+                "emergency_contact_number": row[4]
             }
         return None
     except Exception as e:
@@ -169,7 +171,7 @@ def get_crew_member_by_id(crew_member_id):
         cur.close()
         conn.close()
 
-def update_crew_member(crew_member_id, name=None, aadhaar_number=None, emergency_contact_number=None):
+def update_crew_member(crew_member_id, name=None, aadhaar_number=None, contact_number=None, emergency_contact_number=None):
     """Update a crew member's details."""
     conn = get_db_connection()
     cur = conn.cursor()
@@ -185,6 +187,10 @@ def update_crew_member(crew_member_id, name=None, aadhaar_number=None, emergency
         if aadhaar_number is not None:
             fields.append("aadhaar_number = %s")
             values.append(aadhaar_number)
+
+        if contact_number is not None:
+            fields.append("phone = %s")
+            values.append(contact_number)
 
         if emergency_contact_number is not None:
             fields.append("emergency_contact_number = %s")
