@@ -129,12 +129,23 @@ async def list_my_boats(current_user: dict = Depends(deps.get_boat_owner_user)):
 
 @router.post("/boats", status_code=status.HTTP_201_CREATED)
 async def create_boat(
+    boat_name: str = Form(..., description="Name of the boat"),
+    boat_type: str = Form(..., description="Type of the boat"),
     boat_number: str = Form(..., description="Boat registration number"),
+    harbor_name: str = Form("mumbai", description="Harbor name (default: mumbai)"),
     document: UploadFile = File(None, description="Boat document (PDF or image: JPEG/PNG), optional"),
     current_user: dict = Depends(deps.get_boat_owner_user),
 ):
     """Add a boat for the authenticated boat owner. Optionally upload a document (PDF or image)."""
-    data = {"boat_number": boat_number.strip(), "boat_document": None, "boat_document_content_type": None, "boat_document_filename": None}
+    data = {
+        "boat_name": boat_name.strip(),
+        "boat_type": boat_type.strip(),
+        "boat_number": boat_number.strip(),
+        "harbor_name": harbor_name.strip() if harbor_name else "mumbai",
+        "boat_document": None,
+        "boat_document_content_type": None,
+        "boat_document_filename": None,
+    }
     boat_id = crud_user.create_boat(current_user["id"], data)
     if not boat_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to create boat")
@@ -166,7 +177,10 @@ async def get_my_boat(boat_id: str, current_user: dict = Depends(deps.get_boat_o
 @router.put("/boats/{boat_id}")
 async def update_my_boat(
     boat_id: str,
+    boat_name: str = Form(None, description="Name of the boat (optional)"),
+    boat_type: str = Form(None, description="Type of the boat (optional)"),
     boat_number: str = Form(None, description="Boat registration number (optional)"),
+    harbor_name: str = Form(None, description="Harbor name (optional)"),
     document: UploadFile = File(None, description="Replace boat document with PDF or image (optional)"),
     current_user: dict = Depends(deps.get_boat_owner_user),
 ):
@@ -175,8 +189,14 @@ async def update_my_boat(
     if not boat or boat["boat_owner_id"] != current_user["id"]:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
     update_dict = {}
+    if boat_name is not None and boat_name.strip():
+        update_dict["boat_name"] = boat_name.strip()
+    if boat_type is not None and boat_type.strip():
+        update_dict["boat_type"] = boat_type.strip()
     if boat_number is not None and boat_number.strip():
         update_dict["boat_number"] = boat_number.strip()
+    if harbor_name is not None and harbor_name.strip():
+        update_dict["harbor_name"] = harbor_name.strip()
     if document and document.filename:
         content = await document.read()
         content_type = document.content_type or "application/octet-stream"

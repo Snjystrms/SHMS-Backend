@@ -473,8 +473,8 @@ def mask_mobile(phone: str) -> str:
 
 # ----- Boat CRUD (boats table) -----
 def _boat_from_row(row) -> Dict[str, Any]:
-    """Map boats table row to dict. Columns: id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at, deleted_at."""
-    boat_document = row[3]
+    """Map boats table row to dict. Columns: id, boat_owner_id, boat_number, boat_name, boat_type, harbor_name, boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at."""
+    boat_document = row[6]
     # Normalize stored paths so they are clickable/openable in clients (Swagger, browser)
     if boat_document and not str(boat_document).startswith(("http://", "https://", "/")):
         boat_document = f"/{boat_document}"
@@ -482,11 +482,14 @@ def _boat_from_row(row) -> Dict[str, Any]:
         "id": str(row[0]),
         "boat_owner_id": str(row[1]),
         "boat_number": row[2],
+        "boat_name": row[3],
+        "boat_type": row[4],
+        "harbor_name": row[5],
         "boat_document": boat_document,
-        "boat_document_content_type": row[4],
-        "boat_document_filename": row[5],
-        "created_at": row[6],
-        "updated_at": row[7],
+        "boat_document_content_type": row[7],
+        "boat_document_filename": row[8],
+        "created_at": row[9],
+        "updated_at": row[10],
     }
 
 
@@ -497,7 +500,8 @@ def get_boats_by_owner_id(boat_owner_id: str) -> List[Dict[str, Any]]:
     try:
         cur.execute(
             """
-            SELECT id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
+            SELECT id, boat_owner_id, boat_number, boat_name, boat_type, harbor_name,
+                   boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
             FROM boats WHERE boat_owner_id = %s AND deleted_at IS NULL ORDER BY created_at DESC
             """,
             (boat_owner_id,),
@@ -519,7 +523,8 @@ def get_all_boats(boat_owner_id: Optional[str] = None) -> List[Dict[str, Any]]:
         if boat_owner_id:
             cur.execute(
                 """
-                SELECT id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
+                SELECT id, boat_owner_id, boat_number, boat_name, boat_type, harbor_name,
+                       boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
                 FROM boats WHERE boat_owner_id = %s AND deleted_at IS NULL ORDER BY created_at DESC
                 """,
                 (boat_owner_id,),
@@ -527,7 +532,8 @@ def get_all_boats(boat_owner_id: Optional[str] = None) -> List[Dict[str, Any]]:
         else:
             cur.execute(
                 """
-                SELECT id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
+                SELECT id, boat_owner_id, boat_number, boat_name, boat_type, harbor_name,
+                       boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
                 FROM boats WHERE deleted_at IS NULL ORDER BY created_at DESC
                 """
             )
@@ -547,7 +553,8 @@ def get_boat_by_id(boat_id: str) -> Optional[Dict[str, Any]]:
     try:
         cur.execute(
             """
-            SELECT id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
+            SELECT id, boat_owner_id, boat_number, boat_name, boat_type, harbor_name,
+                   boat_document, boat_document_content_type, boat_document_filename, created_at, updated_at
             FROM boats WHERE id = %s AND deleted_at IS NULL
             """,
             (boat_id,),
@@ -570,13 +577,17 @@ def create_boat(boat_owner_id: str, data: dict) -> Optional[str]:
     try:
         cur.execute(
             """
-            INSERT INTO boats (id, boat_owner_id, boat_number, boat_document, boat_document_content_type, boat_document_filename)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO boats (id, boat_owner_id, boat_number, boat_name, boat_type, harbor_name,
+                               boat_document, boat_document_content_type, boat_document_filename)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 boat_id,
                 boat_owner_id,
                 data.get("boat_number", "").strip(),
+                data.get("boat_name", "").strip() if data.get("boat_name") else None,
+                data.get("boat_type", "").strip() if data.get("boat_type") else None,
+                data.get("harbor_name", "mumbai").strip() if data.get("harbor_name") else "mumbai",
                 data.get("boat_document"),
                 data.get("boat_document_content_type"),
                 data.get("boat_document_filename"),
@@ -595,7 +606,7 @@ def create_boat(boat_owner_id: str, data: dict) -> Optional[str]:
 
 def update_boat(boat_id: str, data: dict) -> bool:
     """Update boat. Only updates provided fields."""
-    allowed = {"boat_number", "boat_document", "boat_document_content_type", "boat_document_filename"}
+    allowed = {"boat_number", "boat_name", "boat_type", "harbor_name", "boat_document", "boat_document_content_type", "boat_document_filename"}
     updates = {k: v for k, v in data.items() if k in allowed and v is not None}
     if not updates:
         return True

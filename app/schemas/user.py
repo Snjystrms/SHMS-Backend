@@ -62,14 +62,20 @@ class BoatOwnerVerifyOtpRequest(BaseModel):
 
 # ----- Boat (owned by boat_owner) -----
 class BoatCreate(BaseModel):
+    boat_name: str
+    boat_type: str
     boat_number: str
+    harbor_name: Optional[str] = "mumbai"
     boat_document: Optional[str] = None
     boat_document_content_type: Optional[str] = None
     boat_document_filename: Optional[str] = None
 
 
 class BoatUpdate(BaseModel):
+    boat_name: Optional[str] = None
+    boat_type: Optional[str] = None
     boat_number: Optional[str] = None
+    harbor_name: Optional[str] = None
     boat_document: Optional[str] = None
     boat_document_content_type: Optional[str] = None
     boat_document_filename: Optional[str] = None
