@@ -388,6 +388,32 @@ def get_boat_owner_by_phone(phone: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+def get_boat_owner_by_name(name: str) -> Optional[Dict[str, Any]]:
+    """Fetch boat owner by name (case-insensitive). Returns None if not found."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT u.id, u.name, u.email, u.phone
+            FROM users u
+            JOIN roles r ON u.role_id = r.id
+            WHERE LOWER(u.name) = LOWER(%s) AND r.name = 'boat_owner' AND u.deleted_at IS NULL
+            """,
+            (name.strip(),)
+        )
+        row = cur.fetchone()
+        if row:
+            return {"id": str(row[0]), "name": row[1], "email": row[2], "phone": row[3]}
+        return None
+    except Exception as e:
+        print(f"Error fetching boat owner by name: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
 def _generate_otp(length: int = 4) -> str:
     return "".join(random.choices(string.digits, k=length))
 

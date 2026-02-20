@@ -40,13 +40,20 @@ async def register_boat_owner(user_data: BoatOwnerCreate):
     Save boat owner to temp_users and send OTP. User is created in users only after OTP verify.
     """
     phone = user_data.phone.strip()
-    existing_boat_owner = crud_user.get_boat_owner_by_phone(phone)
-    if existing_boat_owner:
+    name = user_data.name.strip()
+    existing_by_name = crud_user.get_boat_owner_by_name(name)
+    if existing_by_name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A boat owner with this mobile number already exists",
+            detail="A boat owner with this name already exists",
         )
-    if not crud_user.create_temp_user(user_data.name, phone):
+    # existing_boat_owner = crud_user.get_boat_owner_by_phone(phone)
+    # if existing_boat_owner:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_400_BAD_REQUEST,
+    #         detail="A boat owner with this mobile number already exists",
+    #     )
+    if not crud_user.create_temp_user(name, phone):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save registration",
