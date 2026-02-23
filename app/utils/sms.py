@@ -18,6 +18,11 @@ class SMSProvider(ABC):
     def send_otp(self, phone: str, otp: str) -> bool:
         pass
 
+    def send_message(self, phone: str, message: str) -> bool:
+        """Send arbitrary text message. Override in providers that support it."""
+        logger.info(f"[SMS] Message to {phone}: {message[:50]}...")
+        return True
+
 
 class MockSMSProvider(SMSProvider):
     """Log OTP to console. Use for development."""
@@ -25,6 +30,11 @@ class MockSMSProvider(SMSProvider):
     def send_otp(self, phone: str, otp: str) -> bool:
         logger.info(f"[MOCK SMS] OTP for {phone}: {otp}")
         print(f"[MOCK SMS] OTP for {phone}: {otp}")  # noqa: T201
+        return True
+
+    def send_message(self, phone: str, message: str) -> bool:
+        logger.info(f"[MOCK SMS] Message to {phone}: {message}")
+        print(f"[MOCK SMS] Message to {phone}: {message}")  # noqa: T201
         return True
 
 
@@ -53,6 +63,20 @@ class TwilioSMSProvider(SMSProvider):
     def _format_phone(self, phone: str) -> str:
         p = phone.replace(" ", "").replace("-", "")
         return p if p.startswith("+") else f"+91{p}"  # assume India if no +
+
+    def send_message(self, phone: str, message: str) -> bool:
+        try:
+            from twilio.rest import Client
+            client = Client(self._account_sid, self._auth_token)
+            client.messages.create(
+                body=message,
+                from_=self._from_number,
+                to=self._format_phone(phone)
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Twilio send_message failed: {e}")
+            return False
 
 
 class MSG91SMSProvider(SMSProvider):
@@ -91,6 +115,10 @@ class MSG91SMSProvider(SMSProvider):
         p = phone.replace(" ", "").replace("-", "")
         return p[-10:] if len(p) >= 10 else p  # Indian 10-digit
 
+    def send_message(self, phone: str, message: str) -> bool:
+        logger.info(f"[MSG91] send_message not implemented for custom text, use OTP: {phone}")
+        return True
+
 
 class Fast2SMSSMSProvider(SMSProvider):
     """Fast2SMS. Indian, affordable. https://www.fast2sms.com"""
@@ -118,6 +146,10 @@ class Fast2SMSSMSProvider(SMSProvider):
     def _format_phone(self, phone: str) -> str:
         p = phone.replace(" ", "").replace("-", "")
         return p[-10:] if len(p) >= 10 else p
+
+    def send_message(self, phone: str, message: str) -> bool:
+        logger.info(f"[Fast2SMS] send_message not implemented for custom text: {phone}")
+        return True
 
 
 def get_sms_provider(provider: str, **kwargs) -> SMSProvider:

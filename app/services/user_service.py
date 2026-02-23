@@ -670,6 +670,32 @@ def delete_boat(boat_id: str) -> bool:
         conn.close()
 
 
+def create_pending_boat(boat_number: str, mobile_number: str) -> Optional[str]:
+    """Create a pending (unregistered) boat. boat_owner_id=NULL, is_register=false."""
+    boat_id = str(uuid.uuid4())
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO boats (id, boat_owner_id, boat_number, boat_name, boat_type, harbor_name,
+                               boat_document, boat_document_content_type, boat_document_filename,
+                               is_register, owner_mobile)
+            VALUES (%s, NULL, %s, NULL, NULL, 'mumbai', NULL, NULL, NULL, false, %s)
+            """,
+            (boat_id, boat_number.strip(), mobile_number.strip()),
+        )
+        conn.commit()
+        return boat_id
+    except Exception as e:
+        conn.rollback()
+        print(f"Error creating pending boat: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
 def get_boat_by_number_with_owner(boat_number: str) -> Optional[Dict[str, Any]]:
     """Get boat by registration/boat number (case-insensitive) with owner name. For port officer lookup."""
     if not boat_number or not str(boat_number).strip():

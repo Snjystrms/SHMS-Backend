@@ -82,6 +82,12 @@ class BoatUpdate(BaseModel):
 
 
 # ----- Port officer boat identification -----
+class PendingBoatRegisterRequest(BaseModel):
+    """Request to register a pending boat when identification fails. Sends SMS to owner."""
+    boat_number: str
+    mobile_number: str
+
+
 class BoatIdentifyResponse(BaseModel):
     """Boat details returned after identification (matches Scan Boat UI)."""
     registration_no: str
