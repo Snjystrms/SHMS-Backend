@@ -79,3 +79,15 @@ class BoatUpdate(BaseModel):
     boat_document: Optional[str] = None
     boat_document_content_type: Optional[str] = None
     boat_document_filename: Optional[str] = None
+
+
+# ----- Port officer boat identification -----
+class BoatIdentifyResponse(BaseModel):
+    """Boat details returned after identification (matches Scan Boat UI)."""
+    registration_no: str
+    vessel_name: Optional[str] = None
+    owner_name: str
+    home_harbor: Optional[str] = None
+    boat_type: Optional[str] = None
+    last_logged_departure: Optional[str] = None  # e.g. "3 days ago" when departure tracking exists
+    boat_id: str

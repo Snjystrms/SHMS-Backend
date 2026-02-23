@@ -668,3 +668,36 @@ def delete_boat(boat_id: str) -> bool:
     finally:
         cur.close()
         conn.close()
+
+
+def get_boat_by_number_with_owner(boat_number: str) -> Optional[Dict[str, Any]]:
+    """Get boat by registration/boat number (case-insensitive) with owner name. For port officer lookup."""
+    if not boat_number or not str(boat_number).strip():
+        return None
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT b.id, b.boat_owner_id, b.boat_number, b.boat_name, b.boat_type, b.harbor_name,
+                   b.boat_document, b.boat_document_content_type, b.boat_document_filename,
+                   b.created_at, b.updated_at, u.name as owner_name
+            FROM boats b
+            JOIN users u ON b.boat_owner_id = u.id AND u.deleted_at IS NULL
+            WHERE LOWER(TRIM(b.boat_number)) = LOWER(TRIM(%s)) AND b.deleted_at IS NULL
+            LIMIT 1
+            """,
+            (boat_number.strip(),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        boat = _boat_from_row(row[:11])
+        boat["owner_name"] = row[11]
+        return boat
+    except Exception as e:
+        print(f"Error fetching boat by number: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
