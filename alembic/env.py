@@ -29,7 +29,10 @@ target_metadata = None
 
 def get_url() -> str:
     """Build the database URL from settings."""
-    return f"postgresql+psycopg2://{settings.DB_USER}:{settings.DB_PASSWORD}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
+    url = f"postgresql+psycopg2://{settings.DB_USER}:{settings.DB_PASSWORD}@{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
+    if getattr(settings, "DB_SSLMODE", None):
+        url += f"?sslmode={settings.DB_SSLMODE}"
+    return url
 
 
 

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     DB_USER: str = "postgres"
     DB_PASSWORD: str = "password"
     DB_NAME: str = "shms_db"
+    DB_SSLMODE: Optional[str] = None  # e.g. "require" for Neon; None = no SSL param
     
     # FACE
     FACE_MATCH_THRESHOLD: float = 0.40
