@@ -25,8 +25,22 @@ class Settings(BaseSettings):
     DB_SSLMODE: Optional[str] = None  # e.g. "require" for Neon; None = no SSL param
     
     # FACE
+    # Distance threshold (pgvector <=>) for treating a face as a match
     FACE_MATCH_THRESHOLD: float = 0.40
+    # Tighter distance threshold for treating a new registration as duplicate
     FACE_DUPLICATE_THRESHOLD: float = 0.30
+    # InsightFace FaceAnalysis model configuration (pluggable via env)
+    # Default uses ArcFace Buffalo_L pipeline as per FACE_RECOGNITION_SYSTEM_UPGRADE_2026.md
+    FACE_MODEL_NAME: str = "buffalo_l"
+    # GPU id for InsightFace (0 = first GPU, -1 = CPU)
+    FACE_CTX_ID: int = 0
+
+    # YOLO human detection (first stage filter for group images)
+    YOLO_ENABLED: bool = True
+    # Model name/path; e.g. "yolov8n.pt" / "yolo11n.pt" / custom
+    YOLO_MODEL_NAME: str = "yolov8n.pt"
+    # Confidence threshold for person detections
+    YOLO_CONF_THRESHOLD: float = 0.25
 
     # SMS (forgot password OTP). Provider: mock | twilio | msg91 | fast2sms
     SMS_PROVIDER: str = "mock"

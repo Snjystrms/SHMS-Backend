@@ -1,17 +1,28 @@
 import json
+import uuid
 import numpy as np
-from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends
+from typing import Dict, List, Optional
+from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException, status, Depends
+from fastapi.responses import Response
 from app.services import face_service
 from app.services import user_service as crud_user
 from app.core.config import settings
 from app.api import deps
-from app.schemas.crew import CrewMemberResponse, CrewMemberUpdate, CrewVerifyOtpRequest
+from app.schemas.crew import (
+    CrewMemberResponse,
+    CrewMemberUpdate,
+    CrewVerifyOtpRequest,
+    CrewGroupScanResponse,
+    CrewFaceScanResult,
+)
 from app.schemas.user import ForgotPasswordRequest
 from app.utils.otp_helpers import get_sms
 
 
 router = APIRouter()
+
+# Temporary store for scan result images (result_id -> PNG bytes). One-time read then removed.
+_scan_result_images: Dict[str, bytes] = {}
 
 @router.get("/crew-members", response_model=List[CrewMemberResponse])
 async def list_crew_members(
@@ -224,6 +235,100 @@ async def update_crew_member(
         )
     
     return {"success": True, "message": "Crew member updated successfully"}
+
+
+@router.get(
+    "/crew-members/scan-result/{result_id}/image",
+    name="get_scan_result_image",
+    response_class=Response,
+    responses={200: {"content": {"image/png": {}}, "description": "Annotated PNG image"}},
+)
+async def get_scan_result_image(result_id: str):
+    """Serve the processed (annotated) image for a scan result. No auth required; URL is one-time (removed after first read)."""
+    png_bytes = _scan_result_images.pop(result_id, None)
+    if png_bytes is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan result image not found or already consumed",
+        )
+    return Response(content=png_bytes, media_type="image/png")
+
+
+@router.post(
+    "/crew-members/scan-group-photo",
+    response_model=CrewGroupScanResponse,
+)
+async def scan_group_photo(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Port officer uploads a group photo to identify crew.
+
+    The image is processed using the configured InsightFace pipeline.
+    Returns JSON with faces (no bbox), counts, and annotated_image_url (URL to fetch the processed PNG).
+    """
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Image file is empty",
+        )
+
+    raw_result = face_service.identify_faces_in_image(image_bytes)
+    if raw_result is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid image data",
+        )
+
+    faces_payload = raw_result.get("faces", [])
+    summary = raw_result.get("summary", {}) or {}
+
+    # Annotated image with boxes drawn (PIL): green = match, red = no match
+    annotated_bytes = face_service.draw_face_boxes_on_image(image_bytes, faces_payload)
+
+    # Store image and return a URL (one-time: GET then removed)
+    annotated_image_url: Optional[str] = None
+    if annotated_bytes:
+        result_id = str(uuid.uuid4())
+        _scan_result_images[result_id] = annotated_bytes
+        path = request.url_for("get_scan_result_image", result_id=result_id)
+        path_str = str(path)
+        if path_str.startswith("http://") or path_str.startswith("https://"):
+            annotated_image_url = path_str
+        else:
+            base = str(request.base_url).rstrip("/")
+            annotated_image_url = f"{base}{path_str}"
+
+    faces: List[CrewFaceScanResult] = []
+    for f in faces_payload:
+        crew_member_data = f.get("crew_member")
+        crew_member_obj = None
+        if crew_member_data:
+            crew_member_obj = CrewMemberResponse(**crew_member_data)
+
+        faces.append(
+            CrewFaceScanResult(
+                det_score=f.get("det_score", 0.0),
+                distance=f.get("distance"),
+                is_match=bool(f.get("is_match")),
+                crew_member=crew_member_obj,
+            )
+        )
+
+    total_faces = int(summary.get("total_faces", len(faces)))
+    matched_count = int(summary.get("matched_count", 0))
+    unmatched_count = int(summary.get("unmatched_count", total_faces - matched_count))
+
+    return CrewGroupScanResponse(
+        faces=faces,
+        total_faces=total_faces,
+        matched_count=matched_count,
+        unmatched_count=unmatched_count,
+        annotated_image_url=annotated_image_url,
+    )
 
 @router.delete("/crew-members/{crew_member_id}")
 async def delete_crew_member(

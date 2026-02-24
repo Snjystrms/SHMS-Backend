@@ -208,3 +208,7 @@ __marimo__/
 
 # Uploaded boat documents (local storage)
 uploads/
+
+# YOLO model weights (auto-downloaded by Ultralytics if missing)
+yolov8n.pt
+*.pt
