@@ -37,6 +37,7 @@ async def create_crew_member(
     aadhaar_number: str = Form(None),
     contact_number: str = Form(None),
     emergency_contact_number: str = Form(None),
+    is_pilot: str = Form("false"),
     file: UploadFile = File(...),
     current_user: dict = Depends(deps.get_admin_or_officer_user)
 ):
@@ -58,7 +59,8 @@ async def create_crew_member(
             detail=f"Face already registered as {existing_username} ({existing_user_id})"
         )
 
-    user_id = face_service.register_user(name, embedding, aadhaar_number, contact_number, emergency_contact_number)
+    is_pilot_val = (is_pilot or "").strip().lower() in ("true", "1", "on", "yes")
+    user_id = face_service.register_user(name, embedding, aadhaar_number, contact_number, emergency_contact_number, is_pilot=is_pilot_val)
     
     if not user_id:
         raise HTTPException(
@@ -73,6 +75,7 @@ async def create_crew_member(
         "aadhaar_number": aadhaar_number,
         "contact_number": contact_number,
         "emergency_contact_number": emergency_contact_number,
+        "is_pilot": is_pilot_val,
         "message": "Crew member created successfully"
     }
 
@@ -97,7 +100,8 @@ async def update_crew_member(
         name=crew_member_data.name,
         aadhaar_number=crew_member_data.aadhaar_number,
         contact_number=crew_member_data.contact_number,
-        emergency_contact_number=crew_member_data.emergency_contact_number
+        emergency_contact_number=crew_member_data.emergency_contact_number,
+        is_pilot=crew_member_data.is_pilot
     )
     if not result:
         raise HTTPException(

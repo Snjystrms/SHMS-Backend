@@ -6,6 +6,7 @@ class CrewMemberBase(BaseModel):
     aadhaar_number: Optional[str] = None
     contact_number: Optional[str] = None
     emergency_contact_number: Optional[str] = None
+    is_pilot: bool = False
 
 class CrewMemberCreate(CrewMemberBase):
     pass
@@ -15,6 +16,7 @@ class CrewMemberUpdate(BaseModel):
     aadhaar_number: Optional[str] = None
     contact_number: Optional[str] = None
     emergency_contact_number: Optional[str] = None
+    is_pilot: Optional[bool] = None
 
 class CrewMemberResponse(CrewMemberBase):
     id: str
