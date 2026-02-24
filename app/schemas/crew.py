@@ -1,6 +1,13 @@
 from typing import Optional
 from pydantic import BaseModel
 
+
+class CrewVerifyOtpRequest(BaseModel):
+    """Request body for crew member OTP verification (after submit)."""
+    mobile_number: str
+    otp: str
+
+
 class CrewMemberBase(BaseModel):
     name: str
     aadhaar_number: Optional[str] = None

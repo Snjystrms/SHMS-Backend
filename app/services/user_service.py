@@ -1,3 +1,4 @@
+import json
 import uuid
 import random
 import string
@@ -356,6 +357,106 @@ def delete_temp_user_by_phone(phone: str) -> bool:
     except Exception as e:
         conn.rollback()
         print(f"Error deleting temp user: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def create_pending_crew(
+    phone: str,
+    name: str,
+    aadhaar_number: Optional[str],
+    emergency_contact_number: Optional[str],
+    is_pilot: bool,
+    embedding_list: List[float],
+) -> bool:
+    """Store pending crew registration (before OTP verify). Replaces existing row for same phone."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM pending_crew_registrations WHERE phone = %s", (phone.strip(),))
+        cur.execute(
+            """
+            INSERT INTO pending_crew_registrations
+            (id, phone, name, aadhaar_number, emergency_contact_number, is_pilot, embedding)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::vector)
+            """,
+            (
+                str(uuid.uuid4()),
+                phone.strip(),
+                name.strip(),
+                (aadhaar_number or "").strip() or None,
+                (emergency_contact_number or "").strip() or None,
+                is_pilot,
+                embedding_list,
+            ),
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error creating pending crew: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_pending_crew_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+    """Fetch pending crew registration by phone. Returns None if not found. embedding is returned as list."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id, phone, name, aadhaar_number, emergency_contact_number, is_pilot, embedding
+            FROM pending_crew_registrations WHERE phone = %s
+            """,
+            (phone.strip(),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        # pgvector may return embedding as list, array-like, or string "[0.1, ...]"
+        emb = row[6]
+        if hasattr(emb, "tolist"):
+            emb = emb.tolist()
+        elif isinstance(emb, str):
+            try:
+                emb = json.loads(emb)
+            except (ValueError, TypeError):
+                emb = []
+        elif not isinstance(emb, list):
+            emb = list(emb) if emb is not None else []
+        return {
+            "id": str(row[0]),
+            "phone": row[1],
+            "name": row[2],
+            "aadhaar_number": row[3],
+            "emergency_contact_number": row[4],
+            "is_pilot": row[5],
+            "embedding": emb,
+        }
+    except Exception as e:
+        print(f"Error fetching pending crew: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def delete_pending_crew_by_phone(phone: str) -> bool:
+    """Remove pending crew after successful registration."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM pending_crew_registrations WHERE phone = %s", (phone.strip(),))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error deleting pending crew: {e}")
         return False
     finally:
         cur.close()

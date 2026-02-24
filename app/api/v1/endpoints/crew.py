@@ -1,9 +1,14 @@
+import json
+import numpy as np
 from typing import List, Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends, Body
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends
 from app.services import face_service
+from app.services import user_service as crud_user
 from app.core.config import settings
 from app.api import deps
-from app.schemas.crew import CrewMemberResponse, CrewMemberUpdate
+from app.schemas.crew import CrewMemberResponse, CrewMemberUpdate, CrewVerifyOtpRequest
+from app.schemas.user import ForgotPasswordRequest
+from app.utils.otp_helpers import get_sms
 
 
 router = APIRouter()
@@ -35,13 +40,16 @@ async def get_crew_member(
 async def create_crew_member(
     name: str = Form(...),
     aadhaar_number: str = Form(None),
-    contact_number: str = Form(None),
+    contact_number: str = Form(...),
     emergency_contact_number: str = Form(None),
     is_pilot: str = Form("false"),
     file: UploadFile = File(...),
     current_user: dict = Depends(deps.get_admin_or_officer_user)
 ):
-    """Create a new crew member with an initial face photo."""
+    """
+    Step 1: Submit crew details and face photo. OTP is sent to contact_number.
+    Crew member is created only after OTP verification via POST /crew-members/verify-otp.
+    """
     image_bytes = await file.read()
     embedding = face_service.get_embedding(image_bytes)
 
@@ -50,7 +58,7 @@ async def create_crew_member(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid image or no face detected"
         )
-    
+
     # Check for duplicates
     existing_user_id, existing_username, distance = face_service.find_match(embedding)
     if distance is not None and distance < settings.FACE_DUPLICATE_THRESHOLD:
@@ -59,24 +67,130 @@ async def create_crew_member(
             detail=f"Face already registered as {existing_username} ({existing_user_id})"
         )
 
+    phone = (contact_number or "").strip()
+    if not phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Contact number (phone) is required to send OTP"
+        )
+
     is_pilot_val = (is_pilot or "").strip().lower() in ("true", "1", "on", "yes")
-    user_id = face_service.register_user(name, embedding, aadhaar_number, contact_number, emergency_contact_number, is_pilot=is_pilot_val)
-    
+    if not crud_user.create_pending_crew(
+        phone=phone,
+        name=name,
+        aadhaar_number=aadhaar_number,
+        emergency_contact_number=emergency_contact_number,
+        is_pilot=is_pilot_val,
+        embedding_list=embedding.tolist(),
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save registration"
+        )
+
+    otp, ok = crud_user.create_and_store_otp(phone, settings.SMS_OTP_EXPIRE_MINUTES)
+    if not ok or not otp:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate OTP",
+        )
+    sms = get_sms()
+    if not sms.send_otp(phone, otp):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send OTP",
+        )
+
+    return {
+        "success": True,
+        "message": "OTP sent to your mobile. Verify to complete crew member registration.",
+        "masked_mobile": crud_user.mask_mobile(phone),
+        "expires_in_minutes": settings.SMS_OTP_EXPIRE_MINUTES,
+    }
+
+
+@router.post("/crew-members/verify-otp", status_code=status.HTTP_201_CREATED)
+async def verify_crew_otp(
+    req: CrewVerifyOtpRequest,
+    current_user: dict = Depends(deps.get_admin_or_officer_user)
+):
+    """
+    Step 2: Verify OTP sent to the crew member's phone. On success, creates the crew member and returns details.
+    """
+    phone = req.mobile_number.strip()
+    if not crud_user.verify_otp(phone, req.otp):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired OTP"
+        )
+    pending = crud_user.get_pending_crew_by_phone(phone)
+    if not pending:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No pending crew registration for this phone. Please submit the form again."
+        )
+
+    emb = pending["embedding"]
+    if isinstance(emb, str):
+        emb = json.loads(emb)
+    embedding = np.array(emb, dtype=np.float32)
+    user_id = face_service.register_user(
+        pending["name"],
+        embedding,
+        aadhaar_number=pending["aadhaar_number"],
+        contact_number=pending["phone"],
+        emergency_contact_number=pending["emergency_contact_number"],
+        is_pilot=pending["is_pilot"],
+    )
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to register crew member"
         )
+    crud_user.delete_pending_crew_by_phone(phone)
 
     return {
         "success": True,
         "id": user_id,
-        "name": name,
-        "aadhaar_number": aadhaar_number,
-        "contact_number": contact_number,
-        "emergency_contact_number": emergency_contact_number,
-        "is_pilot": is_pilot_val,
+        "name": pending["name"],
+        "aadhaar_number": pending["aadhaar_number"],
+        "contact_number": pending["phone"],
+        "emergency_contact_number": pending["emergency_contact_number"],
+        "is_pilot": pending["is_pilot"],
         "message": "Crew member created successfully"
+    }
+
+
+@router.post("/crew-members/resend-otp")
+async def resend_crew_otp(
+    req: ForgotPasswordRequest,
+    current_user: dict = Depends(deps.get_admin_or_officer_user)
+):
+    """Resend OTP for pending crew registration. Only valid if a pending registration exists for this phone."""
+    phone = req.mobile_number.strip()
+    pending = crud_user.get_pending_crew_by_phone(phone)
+    if not pending:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No pending crew registration for this phone. Please submit the form again."
+        )
+    otp, ok = crud_user.create_and_store_otp(phone, settings.SMS_OTP_EXPIRE_MINUTES)
+    if not ok or not otp:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate OTP",
+        )
+    sms = get_sms()
+    if not sms.send_otp(phone, otp):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send OTP",
+        )
+    return {
+        "success": True,
+        "message": "OTP resent.",
+        "masked_mobile": crud_user.mask_mobile(phone),
+        "expires_in_minutes": settings.SMS_OTP_EXPIRE_MINUTES,
     }
 
 @router.put("/crew-members/{crew_member_id}", response_model=dict)
