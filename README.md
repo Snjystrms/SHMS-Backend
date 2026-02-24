@@ -1,13 +1,34 @@
-# Face Recognition System (FastAPI + InsightFace)
+# SHMS Backend (FastAPI + PostgreSQL)
 
-A production-ready **Face Recognition Backend** built with **FastAPI**, **InsightFace**, and **PostgreSQL (pgvector)**.
+A **FastAPI** backend with **PostgreSQL (pgvector)** for face recognition, boats, crew, trips, and more.
 
-This system allows you to:
+---
 
-* 📸 Register a user by uploading a face image
-* 🔍 Identify a user by matching a face against stored embeddings
-* 🚫 Prevent duplicate registrations (same face uploaded multiple times)
-* ⚡ Perform fast similarity search using vector embeddings
+## ⚡ Quick Setup
+
+```bash
+# 1. Create virtual environment
+python3.11 -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Configure environment
+cp .env.example .env
+# Edit .env with your DB credentials (DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
+
+# 4. PostgreSQL: enable pgvector
+# In psql: CREATE EXTENSION IF NOT EXISTS vector;
+
+# 5. Run migrations
+alembic upgrade head
+
+# 6. Start server
+uvicorn app.main:app --reload
+```
+
+**API docs:** http://127.0.0.1:8000/docs
 
 ---
 
