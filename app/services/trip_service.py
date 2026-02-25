@@ -31,7 +31,7 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
 
         cur.execute(
             """
-            SELECT movement_type, movement_at, port_name, crew_count
+            SELECT movement_type, movement_at, port_name, crew_count, image_url
             FROM boat_movements
             WHERE boat_id = %s
             ORDER BY movement_at DESC
@@ -51,7 +51,7 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
                 "last_movement_at": None,
             }
 
-        latest_type, latest_at, port_name, crew_count = movements[0]
+        latest_type, latest_at, port_name, crew_count, image_url = movements[0]
 
         if latest_type == "departure":
             trip_status = "sailing"
@@ -61,6 +61,7 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
                 "vessel_type": boat_type,
                 "crew_count": crew_count,
                 "status_label": "Sailing",
+                "image_url": image_url,
             }
             has_open = True
         elif latest_type == "arrival":
@@ -83,6 +84,7 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
             "departure_details": departure_details,
             "has_open_departure": has_open,
             "last_movement_at": latest_at,
+            "last_movement_image_url": image_url,
         }
     except Exception as e:
         print(f"Error fetching boat trip status: {e}")
@@ -99,6 +101,7 @@ def create_boat_movement(
     logged_by_user_id: Optional[str],
     partial_arrival_reason: Optional[str],
     partial_arrival_details: Optional[str],
+    image_url: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
     Create a boat movement record. Returns (movement_dict, None) on success,
@@ -129,8 +132,8 @@ def create_boat_movement(
             """
             INSERT INTO boat_movements (
                 id, boat_id, movement_type, movement_at,
-                logged_by_user_id, partial_arrival_reason, partial_arrival_details
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                logged_by_user_id, partial_arrival_reason, partial_arrival_details, image_url
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 movement_id,
@@ -140,6 +143,7 @@ def create_boat_movement(
                 logged_by_user_id,
                 partial_arrival_reason,
                 partial_arrival_details,
+                image_url,
             ),
         )
         conn.commit()
@@ -151,6 +155,7 @@ def create_boat_movement(
             "movement_at": movement_at_val,
             "partial_arrival_reason": partial_arrival_reason,
             "partial_arrival_details": partial_arrival_details,
+            "image_url": image_url,
         }, None
     except Exception as e:
         conn.rollback()

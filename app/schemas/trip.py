@@ -22,6 +22,7 @@ class DepartureDetails(BaseModel):
     vessel_type: Optional[str] = None
     crew_count: Optional[int] = None
     status_label: str = "Sailing"
+    image_url: Optional[str] = None
 
 
 class BoatTripStatusResponse(BaseModel):
@@ -33,16 +34,19 @@ class BoatTripStatusResponse(BaseModel):
     departure_details: Optional[DepartureDetails] = None
     has_open_departure: bool = False
     last_movement_at: Optional[datetime] = None
+    last_movement_image_url: Optional[str] = None
 
 
 class BoatMovementCreate(BaseModel):
     """Request to log a boat movement (departure, arrival, or partial arrival).
-    Crew and port details are added in a separate step before final departure."""
+    Crew and port details are added in a separate step before final departure.
+    image_url stores the crew-scan (or other) image URL for this movement type."""
 
     movement_type: Literal["departure", "arrival", "partial_arrival"]
     movement_at: Optional[datetime] = None  # Defaults to now if omitted
     partial_arrival_reason: Optional[PartialArrivalReason] = None
     partial_arrival_details: Optional[str] = None
+    image_url: Optional[str] = None  # URL to image for this movement (e.g. crew scan)
 
     @model_validator(mode="after")
     def validate_partial_arrival(self):
@@ -67,6 +71,7 @@ class BoatMovementResponse(BaseModel):
     movement_at: datetime
     partial_arrival_reason: Optional[str] = None
     partial_arrival_details: Optional[str] = None
+    image_url: Optional[str] = None
 
 
 class BoatMovementCrewMemberItem(BaseModel):

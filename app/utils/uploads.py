@@ -63,3 +63,22 @@ def _ext_for_content_type(ct: str) -> str:
     if ct == "image/png":
         return ".png"
     return ".bin"
+
+
+def save_crew_scan_image(content: bytes, upload_root: Optional[str] = None) -> Optional[str]:
+    """
+    Save annotated crew scan image (PNG with face boxes) to uploads/crew-scan/<uuid>.png.
+    Returns URL path for static serving, e.g. /uploads/crew-scan/<uuid>.png.
+    """
+    if not content:
+        return None
+    root = upload_root or os.path.join(os.getcwd(), "uploads", "crew-scan")
+    os.makedirs(root, exist_ok=True)
+    name = f"{uuid.uuid4().hex}.png"
+    file_path = os.path.join(root, name)
+    try:
+        with open(file_path, "wb") as f:
+            f.write(content)
+    except OSError:
+        return None
+    return f"/uploads/crew-scan/{name}"

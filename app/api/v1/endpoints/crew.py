@@ -18,12 +18,13 @@ from app.schemas.crew import (
 )
 from app.schemas.user import ForgotPasswordRequest
 from app.utils.otp_helpers import get_sms
+from app.utils.uploads import save_crew_scan_image
 
 
 router = APIRouter()
 
-# Temporary store for scan result images (result_id -> PNG bytes). One-time read then removed.
-_scan_result_images: Dict[str, bytes] = {}
+# In-memory store for cropped face images (crop_id -> PNG bytes). Served on demand; not saved to disk.
+_scan_result_crops: Dict[str, bytes] = {}
 
 @router.get("/crew-members", response_model=List[CrewMemberResponse])
 async def list_crew_members(
@@ -282,18 +283,18 @@ async def update_crew_member(
 
 
 @router.get(
-    "/crew-members/scan-result/{result_id}/image",
-    name="get_scan_result_image",
+    "/crew-members/scan-result/{crop_id}/crop",
+    name="get_scan_result_crop",
     response_class=Response,
-    responses={200: {"content": {"image/png": {}}, "description": "Annotated PNG image"}},
+    responses={200: {"content": {"image/png": {}}, "description": "Cropped face/person PNG"}},
 )
-async def get_scan_result_image(result_id: str):
-    """Serve the processed (annotated) image for a scan result. No auth required; URL is one-time (removed after first read)."""
-    png_bytes = _scan_result_images.pop(result_id, None)
+async def get_scan_result_crop(crop_id: str):
+    """Serve a cropped face/person image for a scan result. No auth required."""
+    png_bytes = _scan_result_crops.get(crop_id)
     if png_bytes is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Scan result image not found or already consumed",
+            detail="Crop image not found",
         )
     return Response(content=png_bytes, media_type="image/png")
 
@@ -333,25 +334,32 @@ async def scan_group_photo(
     # Annotated image with boxes drawn (PIL): green = match, red = no match
     annotated_bytes = face_service.draw_face_boxes_on_image(image_bytes, faces_payload)
 
-    # Store image and return a URL (one-time: GET then removed)
+    # Save annotated image to uploads folder and return URL (served by StaticFiles at /uploads/...)
     annotated_image_url: Optional[str] = None
     if annotated_bytes:
-        result_id = str(uuid.uuid4())
-        _scan_result_images[result_id] = annotated_bytes
-        path = request.url_for("get_scan_result_image", result_id=result_id)
-        path_str = str(path)
-        if path_str.startswith("http://") or path_str.startswith("https://"):
-            annotated_image_url = path_str
-        else:
+        url_path = save_crew_scan_image(annotated_bytes)
+        if url_path:
             base = str(request.base_url).rstrip("/")
-            annotated_image_url = f"{base}{path_str}"
+            annotated_image_url = f"{base}{url_path}"
 
     faces: List[CrewFaceScanResult] = []
+    base_url = str(request.base_url).rstrip("/")
     for f in faces_payload:
         crew_member_data = f.get("crew_member")
         crew_member_obj = None
         if crew_member_data:
             crew_member_obj = CrewMemberResponse(**crew_member_data)
+
+        crop_image_url: Optional[str] = None
+        bbox = f.get("bbox")
+        if bbox and len(bbox) == 4:
+            crop_bytes = face_service.crop_face_from_image(image_bytes, bbox)
+            if crop_bytes:
+                crop_id = str(uuid.uuid4())
+                _scan_result_crops[crop_id] = crop_bytes
+                path = request.url_for("get_scan_result_crop", crop_id=crop_id)
+                path_str = str(path)
+                crop_image_url = path_str if (path_str.startswith("http://") or path_str.startswith("https://")) else f"{base_url}{path_str}"
 
         faces.append(
             CrewFaceScanResult(
@@ -359,6 +367,7 @@ async def scan_group_photo(
                 distance=f.get("distance"),
                 is_match=bool(f.get("is_match")),
                 crew_member=crew_member_obj,
+                crop_image_url=crop_image_url,
             )
         )
 

@@ -88,6 +88,29 @@ def draw_face_boxes_on_image(
     return buf.getvalue()
 
 
+def crop_face_from_image(image_bytes: bytes, bbox: List[float]) -> Optional[bytes]:
+    """
+    Crop the face/person region from the image using bbox [x1, y1, x2, y2].
+    Returns PNG image bytes, or None if the image cannot be opened or bbox is invalid.
+    """
+    if not image_bytes or not bbox or len(bbox) != 4:
+        return None
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception:
+        return None
+    w, h = img.size
+    x1, y1, x2, y2 = [int(round(x)) for x in bbox]
+    x1 = max(0, min(x1, w - 1))
+    y1 = max(0, min(y1, h - 1))
+    x2 = max(x1 + 1, min(x2, w))
+    y2 = max(y1 + 1, min(y2, h))
+    crop = img.crop((x1, y1, x2, y2))
+    buf = io.BytesIO()
+    crop.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def get_embedding(image_bytes: bytes) -> Optional[np.ndarray]:
     """
     Backwards‑compatible helper for single‑face flows (registration).

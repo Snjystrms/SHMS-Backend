@@ -49,6 +49,7 @@ class CrewFaceScanResult(BaseModel):
     distance: Optional[float] = None
     is_match: bool
     crew_member: Optional[CrewMemberResponse] = None
+    crop_image_url: Optional[str] = None  # One-time URL to GET the cropped face/person PNG for frontend display.
 
 
 class CrewGroupScanResponse(BaseModel):

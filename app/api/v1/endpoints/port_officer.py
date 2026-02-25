@@ -113,6 +113,7 @@ async def create_boat_movement(
         logged_by_user_id=current_user.get("id"),
         partial_arrival_reason=body.partial_arrival_reason,
         partial_arrival_details=body.partial_arrival_details,
+        image_url=body.image_url,
     )
     if err:
         if "Boat not found" in err:
