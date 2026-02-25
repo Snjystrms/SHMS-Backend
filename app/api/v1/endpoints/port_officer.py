@@ -1,8 +1,11 @@
 """Port officer endpoints: boat identification by registration number."""
-from fastapi import APIRouter, HTTPException, status, Depends
+import urllib.request
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request
 from app.api import deps
 from app.core.config import settings
-from app.services import user_service, trip_service
+from app.services import user_service, trip_service, face_service
 from app.schemas.user import BoatIdentifyResponse, PendingBoatRegisterRequest
 from app.schemas.trip import (
     BoatTripStatusResponse,
@@ -12,8 +15,39 @@ from app.schemas.trip import (
     BoatMovementCrewResponse,
     BoatMovementInventoryCreate,
     BoatMovementInventoryResponse,
+    ArrivalCrewCheckResponse,
+    ArrivalCrewMemberStatus,
+    ArrivalUnidentifiedEntry,
+    ArrivalInventoryCheckRequest,
+    ArrivalInventoryCheckResponse,
+    ArrivalInventoryItemDiscrepancy,
 )
 from app.utils.sms import get_sms_provider
+from app.utils.uploads import save_crew_scan_image
+
+
+def _fetch_image_bytes_from_url(image_url: str) -> Optional[bytes]:
+    """Fetch image bytes from full URL or from local path (e.g. /uploads/...)."""
+    if not image_url or not image_url.strip():
+        return None
+    url = image_url.strip()
+    if url.startswith("http://") or url.startswith("https://"):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "SHMS-Backend/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.read()
+        except Exception:
+            return None
+    if url.startswith("/"):
+        import os
+        local_path = os.path.join(os.getcwd(), url.lstrip("/"))
+        if os.path.isfile(local_path):
+            try:
+                with open(local_path, "rb") as f:
+                    return f.read()
+            except Exception:
+                return None
+    return None
 
 
 def _get_sms():
@@ -202,6 +236,172 @@ async def set_boat_movement_inventory(
             detail="Failed to attach inventory to movement",
         )
     return BoatMovementInventoryResponse(**result)
+
+
+@router.post(
+    "/movements/{movement_id}/arrival/crew/scan",
+    response_model=ArrivalCrewCheckResponse,
+)
+async def arrival_crew_scan(
+    movement_id: str,
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+    image_url: Optional[str] = Form(None),
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Arrival crew identification: scan image (upload or image_url) and compare with departure crew.
+    Uses movement_id (the departure movement for this trip).
+    - Present: crew was at departure and identified in arrival scan.
+    - Missing: crew was at departure but not identified in arrival scan.
+    - Unidentified: face detected at arrival that does not match any crew from this trip's departure (e.g. from another boat).
+    Provide either file or image_url; if both provided, file takes precedence.
+    """
+    image_bytes: Optional[bytes] = None
+    if file and file.filename:
+        image_bytes = await file.read()
+    if not image_bytes and image_url:
+        image_bytes = _fetch_image_bytes_from_url(image_url)
+    if not image_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide either an image file upload or image_url",
+        )
+
+    departure = trip_service.get_departure_movement_by_id(movement_id)
+    if not departure:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Departure movement not found or not a valid departure.",
+        )
+    boat_id = departure["boat_id"]
+    departure_crew = trip_service.get_departure_crew_with_details(movement_id)
+    departure_crew_ids = {c["id"] for c in departure_crew}
+
+    raw_result = face_service.identify_faces_in_image(image_bytes)
+    if raw_result is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid image or could not process",
+        )
+    faces = raw_result.get("faces", [])
+
+    matched_ids = set()
+    for f in faces:
+        crew = f.get("crew_member")
+        if crew and f.get("is_match") and crew.get("id") in departure_crew_ids:
+            matched_ids.add(crew["id"])
+
+    present_crew = [
+        ArrivalCrewMemberStatus(
+            crew_member_id=c["id"],
+            name=c["name"],
+            is_pilot=c.get("is_pilot", False),
+            status="present",
+        )
+        for c in departure_crew
+        if c["id"] in matched_ids
+    ]
+    missing_crew = [
+        ArrivalCrewMemberStatus(
+            crew_member_id=c["id"],
+            name=c["name"],
+            is_pilot=c.get("is_pilot", False),
+            status="missing",
+        )
+        for c in departure_crew
+        if c["id"] not in matched_ids
+    ]
+    unidentified_count = sum(
+        1 for f in faces
+        if not (f.get("is_match") and f.get("crew_member") and f["crew_member"].get("id") in departure_crew_ids)
+    )
+    unidentified_crew = [ArrivalUnidentifiedEntry() for _ in range(unidentified_count)]
+
+    # Save scan image and build URL
+    saved_path = save_crew_scan_image(image_bytes)
+    final_image_url = None
+    if saved_path:
+        base = str(request.base_url).rstrip("/")
+        final_image_url = f"{base}{saved_path}"
+
+    return ArrivalCrewCheckResponse(
+        movement_id=movement_id,
+        boat_id=boat_id,
+        image_url=final_image_url,
+        crew_at_departure=len(departure_crew),
+        crew_at_arrival=len(present_crew),
+        missing_crew_count=len(missing_crew),
+        unidentified_count=unidentified_count,
+        present_crew=present_crew,
+        missing_crew=missing_crew,
+        unidentified_crew=unidentified_crew,
+    )
+
+
+@router.post(
+    "/movements/{movement_id}/arrival/inventory/check",
+    response_model=ArrivalInventoryCheckResponse,
+)
+async def arrival_inventory_check(
+    movement_id: str,
+    body: ArrivalInventoryCheckRequest,
+    request: Request,
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Compare arrival inventory counts with departure. Returns per-item status: matched or missing.
+    Uses movement_id (the departure movement for this trip). Optionally provide loss_reasons for missing items.
+    """
+    departure = trip_service.get_departure_movement_by_id(movement_id)
+    if not departure:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Departure movement not found or not a valid departure.",
+        )
+    boat_id = departure["boat_id"]
+    dep_inv = trip_service.get_departure_inventory(movement_id)
+
+    loss_reasons = body.loss_reasons or {}
+    items_spec = [
+        ("diesel_liters", "Diesel (L)", body.diesel_liters, dep_inv.get("diesel_liters") if dep_inv else None),
+        ("ice_blocks", "Ice blocks", body.ice_blocks, dep_inv.get("ice_blocks") if dep_inv else None),
+        ("fishing_net_count", "Fishing nets", body.fishing_net_count, dep_inv.get("fishing_net_count") if dep_inv else None),
+        ("plastic_bottle_count", "Plastic bottles", body.plastic_bottle_count, dep_inv.get("plastic_bottle_count") if dep_inv else None),
+        ("plastic_bag_count", "Plastic bags", body.plastic_bag_count, dep_inv.get("plastic_bag_count") if dep_inv else None),
+    ]
+    items: list = []
+    for key, label, arrival_val, dep_val in items_spec:
+        dep_q = dep_val if dep_val is not None else 0
+        arr_q = arrival_val if arrival_val is not None else 0
+        if dep_q == 0 and arr_q == 0:
+            continue
+        is_missing = dep_q > arr_q
+        status_val = "missing" if is_missing else "matched"
+        reason_entry = loss_reasons.get(key)
+        items.append(
+            ArrivalInventoryItemDiscrepancy(
+                item_name=label,
+                departure_quantity=float(dep_q) if isinstance(dep_q, (int, float)) else None,
+                arrival_quantity=float(arr_q) if isinstance(arr_q, (int, float)) else None,
+                status=status_val,
+                reason_for_loss=reason_entry.reason if reason_entry else None,
+                additional_details=reason_entry.additional_details if reason_entry else None,
+            )
+        )
+    all_matched = all(it.status == "matched" for it in items)
+
+    image_url = body.image_url
+    if image_url and not image_url.startswith("http"):
+        image_url = f"{request.base_url.rstrip('/')}{image_url}" if image_url.startswith("/") else image_url
+
+    return ArrivalInventoryCheckResponse(
+        movement_id=movement_id,
+        boat_id=boat_id,
+        image_url=image_url,
+        items=items,
+        all_matched=all_matched,
+    )
 
 
 @router.post("/boats/pending-register", status_code=status.HTTP_201_CREATED)

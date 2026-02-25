@@ -31,7 +31,7 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
 
         cur.execute(
             """
-            SELECT movement_type, movement_at, port_name, crew_count, image_url
+            SELECT id, movement_type, movement_at, port_name, crew_count, image_url
             FROM boat_movements
             WHERE boat_id = %s
             ORDER BY movement_at DESC
@@ -51,7 +51,7 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
                 "last_movement_at": None,
             }
 
-        latest_type, latest_at, port_name, crew_count, image_url = movements[0]
+        latest_id, latest_type, latest_at, port_name, crew_count, image_url = movements[0]
 
         if latest_type == "departure":
             trip_status = "sailing"
@@ -77,7 +77,7 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
             departure_details = None
             has_open = False
 
-        return {
+        result = {
             "boat_id": str(boat_id_val),
             "boat_number": boat_number or "",
             "trip_status": trip_status,
@@ -86,9 +86,129 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
             "last_movement_at": latest_at,
             "last_movement_image_url": image_url,
         }
+        if has_open and latest_id:
+            result["open_departure_movement_id"] = str(latest_id)
+        return result
     except Exception as e:
         print(f"Error fetching boat trip status: {e}")
         return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_open_departure_movement(boat_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Return the open (unclosed) departure movement for this boat, if any.
+    Used for arrival crew/inventory checks. Returns None if boat is not sailing.
+    """
+    status_data = get_boat_trip_status(boat_id)
+    if not status_data or not status_data.get("has_open_departure"):
+        return None
+    movement_id = status_data.get("open_departure_movement_id")
+    if not movement_id:
+        return None
+    return get_departure_movement_by_id(movement_id, boat_id=boat_id)
+
+
+def get_departure_movement_by_id(movement_id: str, boat_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Return the departure movement by id. If boat_id is given, validate it matches.
+    Used when updating by movement_id (arrival crew/inventory checks).
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        if boat_id:
+            cur.execute(
+                """
+                SELECT id, boat_id, movement_type, movement_at, port_name, crew_count, image_url
+                FROM boat_movements
+                WHERE id = %s AND boat_id = %s AND movement_type = 'departure'
+                """,
+                (movement_id, boat_id),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, boat_id, movement_type, movement_at, port_name, crew_count, image_url
+                FROM boat_movements
+                WHERE id = %s AND movement_type = 'departure'
+                """,
+                (movement_id,),
+            )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "id": str(row[0]),
+            "boat_id": str(row[1]),
+            "movement_type": row[2],
+            "movement_at": row[3],
+            "port_name": row[4],
+            "crew_count": row[5],
+            "image_url": row[6],
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_departure_crew_with_details(movement_id: str) -> List[Dict[str, Any]]:
+    """Return list of crew members (id, name, etc.) attached to this departure movement."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT cm.id, cm.name, cm.aadhaar_number, cm.phone, cm.is_pilot
+            FROM boat_movement_crew bmc
+            JOIN crew_members cm ON cm.id = bmc.crew_member_id AND cm.deleted_at IS NULL
+            WHERE bmc.movement_id = %s
+            ORDER BY cm.name
+            """,
+            (movement_id,),
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "id": str(r[0]),
+                "name": r[1] or "",
+                "aadhaar_number": r[2],
+                "phone": r[3],
+                "is_pilot": bool(r[4]) if r[4] is not None else False,
+            }
+            for r in rows
+        ]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_departure_inventory(movement_id: str) -> Optional[Dict[str, Any]]:
+    """Return inventory record for this departure movement, or None."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT diesel_liters, ice_blocks, fishing_net_count, plastic_bottle_count, plastic_bag_count
+            FROM boat_movement_inventory
+            WHERE movement_id = %s
+            LIMIT 1
+            """,
+            (movement_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "diesel_liters": row[0],
+            "ice_blocks": row[1],
+            "fishing_net_count": row[2],
+            "plastic_bottle_count": row[3],
+            "plastic_bag_count": row[4],
+        }
     finally:
         cur.close()
         conn.close()
