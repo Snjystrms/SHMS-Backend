@@ -4,7 +4,15 @@ from app.api import deps
 from app.core.config import settings
 from app.services import user_service, trip_service
 from app.schemas.user import BoatIdentifyResponse, PendingBoatRegisterRequest
-from app.schemas.trip import BoatTripStatusResponse, BoatMovementCreate, BoatMovementResponse
+from app.schemas.trip import (
+    BoatTripStatusResponse,
+    BoatMovementCreate,
+    BoatMovementResponse,
+    BoatMovementCrewCreate,
+    BoatMovementCrewResponse,
+    BoatMovementInventoryCreate,
+    BoatMovementInventoryResponse,
+)
 from app.utils.sms import get_sms_provider
 
 
@@ -122,6 +130,77 @@ async def create_boat_movement(
             detail="Failed to create boat movement",
         )
     return BoatMovementResponse(**movement)
+
+
+@router.post(
+    "/boats/{boat_id}/movements/{movement_id}/crew",
+    response_model=BoatMovementCrewResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def set_boat_movement_crew(
+    boat_id: str,
+    movement_id: str,
+    body: BoatMovementCrewCreate,
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Port officer attaches crew list for a specific departure movement (trip).
+    Frontend should pass the movement_id returned by the departure creation API.
+    """
+    crew_ids = [item.crew_member_id for item in body.crew_members]
+    result, err = trip_service.set_boat_movement_crew(
+        boat_id=boat_id,
+        movement_id=movement_id,
+        crew_member_ids=crew_ids,
+        unidentified_count=0,
+    )
+    if err:
+        if "Departure movement not found" in err:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=err,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to attach crew to movement",
+        )
+    return BoatMovementCrewResponse(**result)
+
+
+@router.post(
+    "/boats/{boat_id}/movements/{movement_id}/inventory",
+    response_model=BoatMovementInventoryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def set_boat_movement_inventory(
+    boat_id: str,
+    movement_id: str,
+    body: BoatMovementInventoryCreate,
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Port officer records diesel, ice, fishing net count and plastic items for a trip.
+    """
+    result, err = trip_service.set_boat_movement_inventory(
+        boat_id=boat_id,
+        movement_id=movement_id,
+        diesel_liters=body.diesel_liters,
+        ice_blocks=body.ice_blocks,
+        fishing_net_count=body.fishing_net_count,
+        plastic_bottle_count=body.plastic_bottle_count,
+        plastic_bag_count=body.plastic_bag_count,
+    )
+    if err:
+        if "Departure movement not found" in err:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=err,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to attach inventory to movement",
+        )
+    return BoatMovementInventoryResponse(**result)
 
 
 @router.post("/boats/pending-register", status_code=status.HTTP_201_CREATED)

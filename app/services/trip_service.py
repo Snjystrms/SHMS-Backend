@@ -1,7 +1,7 @@
 """Trip status service: boat movement tracking (departure, arrival, partial arrival)."""
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from app.db.session import get_db_connection
 
 
@@ -155,6 +155,159 @@ def create_boat_movement(
     except Exception as e:
         conn.rollback()
         print(f"Error creating boat movement: {e}")
+        return None, str(e)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _get_departure_movement_for_boat(
+    cur, boat_id: str, movement_id: str
+) -> Optional[Tuple[str, str]]:
+    """
+    Ensure the given movement_id exists for this boat and is a departure.
+    Returns (movement_id, boat_id) or None.
+    """
+    cur.execute(
+        """
+        SELECT id, boat_id
+        FROM boat_movements
+        WHERE id = %s AND boat_id = %s AND movement_type = 'departure'
+        """,
+        (movement_id, boat_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return row[0], str(row[1])
+
+
+def set_boat_movement_crew(
+    boat_id: str,
+    movement_id: str,
+    crew_member_ids: List[str],
+    unidentified_count: int,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Attach crew list to a specific departure movement.
+    Overwrites any existing crew entries for this movement and updates crew_count.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        key = _get_departure_movement_for_boat(cur, boat_id, movement_id)
+        if not key:
+            return None, "Departure movement not found for this boat"
+
+        # Remove existing crew assignments for this movement
+        cur.execute(
+            "DELETE FROM boat_movement_crew WHERE movement_id = %s",
+            (movement_id,),
+        )
+
+        unique_ids = list(dict.fromkeys(crew_member_ids)) if crew_member_ids else []
+        for cid in unique_ids:
+            cur.execute(
+                """
+                INSERT INTO boat_movement_crew (id, movement_id, crew_member_id)
+                VALUES (%s, %s, %s)
+                """,
+                (str(uuid.uuid4()), movement_id, cid),
+            )
+
+        total_count = len(unique_ids) + max(unidentified_count or 0, 0)
+
+        # Update crew_count on boat_movements for quick status lookup
+        cur.execute(
+            """
+            UPDATE boat_movements
+            SET crew_count = %s
+            WHERE id = %s
+            """,
+            (total_count, movement_id),
+        )
+
+        conn.commit()
+
+        return {
+            "movement_id": movement_id,
+            "boat_id": boat_id,
+            "total_crew_count": total_count,
+            "identified_crew_ids": unique_ids,
+            "unidentified_count": max(unidentified_count or 0, 0),
+        }, None
+    except Exception as e:
+        conn.rollback()
+        print(f"Error setting boat movement crew: {e}")
+        return None, str(e)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def set_boat_movement_inventory(
+    boat_id: str,
+    movement_id: str,
+    diesel_liters: Optional[float],
+    ice_blocks: Optional[int],
+    fishing_net_count: Optional[int],
+    plastic_bottle_count: Optional[int],
+    plastic_bag_count: Optional[int],
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Attach inventory (diesel, ice, nets, plastics) to a specific departure movement.
+    Overwrites any existing inventory record for this movement.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        key = _get_departure_movement_for_boat(cur, boat_id, movement_id)
+        if not key:
+            return None, "Departure movement not found for this boat"
+
+        # Remove any existing inventory row for this movement
+        cur.execute(
+            "DELETE FROM boat_movement_inventory WHERE movement_id = %s",
+            (movement_id,),
+        )
+
+        cur.execute(
+            """
+            INSERT INTO boat_movement_inventory (
+                id,
+                movement_id,
+                diesel_liters,
+                ice_blocks,
+                fishing_net_count,
+                plastic_bottle_count,
+                plastic_bag_count
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                str(uuid.uuid4()),
+                movement_id,
+                diesel_liters,
+                ice_blocks,
+                fishing_net_count,
+                plastic_bottle_count,
+                plastic_bag_count,
+            ),
+        )
+
+        conn.commit()
+
+        return {
+            "movement_id": movement_id,
+            "boat_id": boat_id,
+            "diesel_liters": diesel_liters,
+            "ice_blocks": ice_blocks,
+            "fishing_net_count": fishing_net_count,
+            "plastic_bottle_count": plastic_bottle_count,
+            "plastic_bag_count": plastic_bag_count,
+        }, None
+    except Exception as e:
+        conn.rollback()
+        print(f"Error setting boat movement inventory: {e}")
         return None, str(e)
     finally:
         cur.close()

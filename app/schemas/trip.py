@@ -1,6 +1,6 @@
 """Schemas for boat trip status (departure, arrival, partial arrival)."""
 from datetime import datetime
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 from pydantic import BaseModel, model_validator
 
 TripStatusType = Literal["docked", "sailing", "arrived", "partial_arrival"]
@@ -67,3 +67,51 @@ class BoatMovementResponse(BaseModel):
     movement_at: datetime
     partial_arrival_reason: Optional[str] = None
     partial_arrival_details: Optional[str] = None
+
+
+class BoatMovementCrewMemberItem(BaseModel):
+    """One crew member assigned to a specific trip (boat movement)."""
+
+    crew_member_id: str
+
+
+class BoatMovementCrewCreate(BaseModel):
+    """Request body to attach crew list to a departure movement. Frontend sends only crew_members."""
+
+    crew_members: List[BoatMovementCrewMemberItem]
+
+
+class BoatMovementCrewResponse(BaseModel):
+    """Summary of crew attached to a departure movement."""
+
+    movement_id: str
+    boat_id: str
+    total_crew_count: int
+    identified_crew_ids: List[str]
+    unidentified_count: int
+    success: bool = True
+    message: str = "Crew members added successfully."
+
+
+class BoatMovementInventoryCreate(BaseModel):
+    """Request body to attach inventory details (diesel, ice, nets, plastics) to a movement."""
+
+    diesel_liters: Optional[float] = None
+    ice_blocks: Optional[int] = None
+    fishing_net_count: Optional[int] = None
+    plastic_bottle_count: Optional[int] = None
+    plastic_bag_count: Optional[int] = None
+
+
+class BoatMovementInventoryResponse(BaseModel):
+    """Response for inventory attached to a movement."""
+
+    movement_id: str
+    boat_id: str
+    diesel_liters: Optional[float] = None
+    ice_blocks: Optional[int] = None
+    fishing_net_count: Optional[int] = None
+    plastic_bottle_count: Optional[int] = None
+    plastic_bag_count: Optional[int] = None
+    success: bool = True
+    message: str = "Inventory added successfully."
