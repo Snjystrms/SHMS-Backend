@@ -266,8 +266,52 @@ def find_match(embedding):
         cur.close()
         conn.close()
 
+def register_user_minimal(
+    name: str,
+    aadhaar_number: str,
+    contact_number: Optional[str] = None,
+    emergency_contact_number: Optional[str] = None,
+    is_pilot: bool = False,
+) -> Optional[str]:
+    """
+    Register a crew member with minimum info (officer flow, no face).
+    is_register is always set to False. Returns crew_member_id or None.
+    """
+    aadhaar = (aadhaar_number or "").strip()
+    if not aadhaar:
+        return None
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id FROM crew_members WHERE aadhaar_number = %s AND deleted_at IS NULL LIMIT 1", (aadhaar,))
+        if cur.fetchone():
+            return None  # Duplicate aadhaar; caller may treat as conflict
+        crew_member_id = str(uuid.uuid4())
+        cur.execute(
+            """INSERT INTO crew_members (id, name, aadhaar_number, phone, emergency_contact_number, is_pilot, is_register)
+               VALUES (%s, %s, %s, %s, %s, %s, false)""",
+            (
+                crew_member_id,
+                (name or "").strip(),
+                aadhaar,
+                (contact_number or "").strip() or None,
+                (emergency_contact_number or "").strip() or None,
+                is_pilot,
+            ),
+        )
+        conn.commit()
+        return crew_member_id
+    except Exception as e:
+        conn.rollback()
+        print(f"Error in register_user_minimal: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
 def register_user(name, embedding, aadhaar_number=None, contact_number=None, emergency_contact_number=None, is_pilot=False):
-    """Register a new crew member with an initial face embedding."""
+    """Register a new crew member with an initial face embedding. Sets is_register=true (full registration)."""
     crew_member_id = str(uuid.uuid4())
     emb_id = str(uuid.uuid4())
 
@@ -275,12 +319,13 @@ def register_user(name, embedding, aadhaar_number=None, contact_number=None, eme
     cur = conn.cursor()
     try:
         cur.execute(
-            "INSERT INTO crew_members (id, name, aadhaar_number, phone, emergency_contact_number, is_pilot) VALUES (%s, %s, %s, %s, %s, %s)",
-            (crew_member_id, name, aadhaar_number, contact_number, emergency_contact_number, is_pilot)
+            """INSERT INTO crew_members (id, name, aadhaar_number, phone, emergency_contact_number, is_pilot, is_register)
+               VALUES (%s, %s, %s, %s, %s, %s, true)""",
+            (crew_member_id, name, aadhaar_number, contact_number, emergency_contact_number, is_pilot),
         )
         cur.execute(
             "INSERT INTO crew_face_embeddings (id, crew_member_id, embedding) VALUES (%s, %s, %s)",
-            (emb_id, crew_member_id, embedding.tolist())
+            (emb_id, crew_member_id, embedding.tolist()),
         )
         conn.commit()
         return crew_member_id
@@ -334,13 +379,14 @@ def get_all_crew_members(skip=0, limit=100):
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT id, name, aadhaar_number, phone, emergency_contact_number, is_pilot 
-            FROM crew_members 
-            ORDER BY created_at DESC 
+            SELECT id, name, aadhaar_number, phone, emergency_contact_number, is_pilot, is_register
+            FROM crew_members
+            WHERE deleted_at IS NULL
+            ORDER BY created_at DESC
             OFFSET %s LIMIT %s
         """, (skip, limit))
         rows = cur.fetchall()
-        
+
         crew_members = []
         for row in rows:
             crew_members.append({
@@ -350,6 +396,7 @@ def get_all_crew_members(skip=0, limit=100):
                 "contact_number": row[3],
                 "emergency_contact_number": row[4],
                 "is_pilot": row[5] if len(row) > 5 else False,
+                "is_register": row[6] if len(row) > 6 else False,
             })
         return crew_members
     except Exception as e:
@@ -365,12 +412,12 @@ def get_crew_member_by_id(crew_member_id):
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT id, name, aadhaar_number, phone, emergency_contact_number, is_pilot 
-            FROM crew_members 
-            WHERE id = %s
+            SELECT id, name, aadhaar_number, phone, emergency_contact_number, is_pilot, is_register
+            FROM crew_members
+            WHERE id = %s AND deleted_at IS NULL
         """, (crew_member_id,))
         row = cur.fetchone()
-        
+
         if row:
             return {
                 "id": str(row[0]),
@@ -379,6 +426,7 @@ def get_crew_member_by_id(crew_member_id):
                 "contact_number": row[3],
                 "emergency_contact_number": row[4],
                 "is_pilot": row[5] if len(row) > 5 else False,
+                "is_register": row[6] if len(row) > 6 else False,
             }
         return None
     except Exception as e:

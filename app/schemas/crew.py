@@ -8,12 +8,22 @@ class CrewVerifyOtpRequest(BaseModel):
     otp: str
 
 
+class OfficerRegisterUserRequest(BaseModel):
+    """Officer registers a user with minimum info. Only name and aadhaar are required; is_register is always false."""
+    name: str
+    aadhaar_number: str
+    contact_number: Optional[str] = None
+    emergency_contact_number: Optional[str] = None
+    is_pilot: bool = False
+
+
 class CrewMemberBase(BaseModel):
     name: str
     aadhaar_number: Optional[str] = None
     contact_number: Optional[str] = None
     emergency_contact_number: Optional[str] = None
     is_pilot: bool = False
+    is_register: bool = False
 
 class CrewMemberCreate(CrewMemberBase):
     pass
@@ -27,7 +37,8 @@ class CrewMemberUpdate(BaseModel):
 
 class CrewMemberResponse(CrewMemberBase):
     id: str
-    
+    is_register: bool = False
+
     class Config:
         from_attributes = True
 

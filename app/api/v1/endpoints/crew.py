@@ -14,6 +14,7 @@ from app.schemas.crew import (
     CrewVerifyOtpRequest,
     CrewGroupScanResponse,
     CrewFaceScanResult,
+    OfficerRegisterUserRequest,
 )
 from app.schemas.user import ForgotPasswordRequest
 from app.utils.otp_helpers import get_sms
@@ -46,6 +47,49 @@ async def get_crew_member(
             detail="Crew member not found"
         )
     return crew_member
+
+@router.post("/crew-members/register", status_code=status.HTTP_201_CREATED)
+async def officer_register_user(
+    body: OfficerRegisterUserRequest,
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Officer registers a user with minimum info. Compulsory: name, aadhaar_number.
+    Optional: contact_number, emergency_contact_number, is_pilot.
+    is_register is always set to false for this flow.
+    """
+    name = (body.name or "").strip()
+    aadhaar = (body.aadhaar_number or "").strip()
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Name is required",
+        )
+    if not aadhaar:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Aadhaar number is required",
+        )
+    crew_member_id = face_service.register_user_minimal(
+        name=name,
+        aadhaar_number=aadhaar,
+        contact_number=body.contact_number,
+        emergency_contact_number=body.emergency_contact_number,
+        is_pilot=body.is_pilot,
+    )
+    if not crew_member_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A crew member with this Aadhaar number already exists",
+        )
+    crew_member = face_service.get_crew_member_by_id(crew_member_id)
+    return {
+        "success": True,
+        "id": crew_member_id,
+        "message": "User registered successfully (is_register=false)",
+        "crew_member": crew_member,
+    }
+
 
 @router.post("/crew-members", status_code=status.HTTP_201_CREATED)
 async def create_crew_member(
