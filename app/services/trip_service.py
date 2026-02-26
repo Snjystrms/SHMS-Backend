@@ -520,3 +520,84 @@ def set_boat_movement_inventory(
     finally:
         cur.close()
         conn.close()
+
+
+def get_scanned_crew_history(
+    officer_user_id: Optional[str],
+    date_filter: str,
+    is_register: Optional[bool] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Return list of crew scanned (attached to departures) for movements logged by an officer.
+    Used by the Crew Scanned history screen.
+    """
+    now = datetime.now(timezone.utc)
+    if date_filter == "today":
+        start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    elif date_filter == "last_7_days":
+        start = now - timedelta(days=7)
+    elif date_filter == "last_15_days":
+        start = now - timedelta(days=15)
+    else:
+        raise ValueError("Invalid date_filter")
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        params: List[Any] = [start]
+        clauses: List[str] = []
+        if officer_user_id:
+            clauses.append("m.logged_by_user_id = %s")
+            params.append(officer_user_id)
+        if is_register is not None:
+            clauses.append("cm.is_register = %s")
+            params.append(is_register)
+
+        where_extra = ""
+        if clauses:
+            where_extra = " AND " + " AND ".join(clauses)
+
+        cur.execute(
+            f"""
+            SELECT
+                cm.id AS crew_id,
+                cm.name AS crew_name,
+                cm.aadhaar_number,
+                cm.phone,
+                cm.emergency_contact_number,
+                cm.is_pilot,
+                b.id AS boat_id,
+                b.boat_name,
+                b.boat_number,
+                m.movement_at
+            FROM boat_movements m
+            JOIN boat_movement_crew bmc ON bmc.movement_id = m.id
+            JOIN crew_members cm ON cm.id = bmc.crew_member_id AND cm.deleted_at IS NULL
+            JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
+            WHERE m.movement_type = 'departure'
+              AND m.movement_at >= %s
+              {where_extra}
+            ORDER BY m.movement_at DESC
+            LIMIT 200
+            """,
+            tuple(params),
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "crew_id": str(r[0]),
+                "crew_name": r[1] or "",
+                "aadhaar_number": r[2],
+                "phone_number": r[3],
+                "emergency_contact_number": r[4],
+                "is_pilot": bool(r[5]) if r[5] is not None else False,
+                "boat_id": str(r[6]),
+                "boat_name": r[7],
+                "boat_number": r[8],
+                "movement_at": r[9].isoformat() if r[9] else None,
+            }
+            for r in rows
+        ]
+    finally:
+        cur.close()
+        conn.close()

@@ -7,6 +7,11 @@ from app.api import deps
 from app.core.config import settings
 from app.services import user_service, trip_service, face_service
 from app.schemas.user import BoatIdentifyResponse, PendingBoatRegisterRequest
+from app.schemas.crew import (
+    CrewScannedHistoryResponse,
+    CrewScannedHistoryItem,
+    CrewHistoryDateFilter,
+)
 from app.schemas.trip import (
     BoatTripStatusResponse,
     BoatMovementCreate,
@@ -147,6 +152,34 @@ async def get_movement_history(
     records = [BoatMovementHistoryItem(**r) for r in records_raw]
     return BoatMovementHistoryResponse(
         movement_type=movement_type,
+        date_filter=date_filter,
+        total_records=len(records),
+        records=records,
+    )
+
+
+@router.get(
+    "/crew-scanned/history",
+    response_model=CrewScannedHistoryResponse,
+)
+async def get_crew_scanned_history(
+    date_filter: CrewHistoryDateFilter = "today",
+    is_register: Optional[bool] = None,
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Crew Scanned history for an officer.
+    Returns crew name, boat name, crew id, boat number, is_pilot,
+    phone number, aadhaar number and emergency contact number.
+    """
+    officer_id = current_user.get("id")
+    records_raw = trip_service.get_scanned_crew_history(
+        officer_user_id=officer_id,
+        date_filter=date_filter,
+        is_register=is_register,
+    )
+    records = [CrewScannedHistoryItem(**r) for r in records_raw]
+    return CrewScannedHistoryResponse(
         date_filter=date_filter,
         total_records=len(records),
         records=records,

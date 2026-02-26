@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import BaseModel
 
 
@@ -60,3 +60,31 @@ class CrewGroupScanResponse(BaseModel):
     matched_count: int
     unmatched_count: int
     annotated_image_url: Optional[str] = None  # URL to GET the processed PNG (green=match, red=no match). One-time use.
+
+
+# ----- Crew scanned history (per officer) -----
+
+CrewHistoryDateFilter = Literal["today", "last_7_days", "last_15_days"]
+
+
+class CrewScannedHistoryItem(BaseModel):
+    """One row in the Crew Scanned history list."""
+
+    crew_id: str
+    crew_name: str
+    boat_id: str
+    boat_name: Optional[str] = None
+    boat_number: Optional[str] = None
+    is_pilot: bool = False
+    phone_number: Optional[str] = None
+    aadhaar_number: Optional[str] = None
+    emergency_contact_number: Optional[str] = None
+    movement_at: Optional[str] = None
+
+
+class CrewScannedHistoryResponse(BaseModel):
+    """History response for crew scanned by an officer."""
+
+    date_filter: CrewHistoryDateFilter
+    total_records: int
+    records: List[CrewScannedHistoryItem]
