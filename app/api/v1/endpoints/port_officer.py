@@ -315,17 +315,19 @@ async def arrival_crew_scan(
     )
     unidentified_crew = [ArrivalUnidentifiedEntry() for _ in range(unidentified_count)]
 
-    # Save scan image and build URL
-    saved_path = save_crew_scan_image(image_bytes)
-    final_image_url = None
-    if saved_path:
-        base = str(request.base_url).rstrip("/")
-        final_image_url = f"{base}{saved_path}"
+    # Generate annotated image with boxes for present/missing/unidentified
+    annotated_image_url = None
+    annotated_bytes = face_service.draw_face_boxes_on_image(image_bytes, faces)
+    if annotated_bytes:
+        annotated_path = save_crew_scan_image(annotated_bytes)
+        if annotated_path:
+            base = str(request.base_url).rstrip("/")
+            annotated_image_url = f"{base}{annotated_path}"
 
     return ArrivalCrewCheckResponse(
         movement_id=movement_id,
         boat_id=boat_id,
-        image_url=final_image_url,
+        annotated_image_url=annotated_image_url,
         crew_at_departure=len(departure_crew),
         crew_at_arrival=len(present_crew),
         missing_crew_count=len(missing_crew),
