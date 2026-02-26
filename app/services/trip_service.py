@@ -353,8 +353,11 @@ def create_boat_movement(
     image_url: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
-    Create a boat movement record. Returns (movement_dict, None) on success,
-    or (None, error_message) on validation/DB error.
+    Create or update a boat movement record.
+    - Departure: always creates a new movement (new id).
+    - Arrival: updates the existing open departure row (same movement id); does not create a new row.
+    - Partial arrival: creates a new movement (new id).
+    Returns (movement_dict, None) on success, or (None, error_message) on validation/DB error.
     """
     conn = get_db_connection()
     cur = conn.cursor()
@@ -369,7 +372,39 @@ def create_boat_movement(
         if movement_type == "arrival":
             status_data = get_boat_trip_status(boat_id)
             if not status_data or not status_data.get("has_open_departure"):
-                return None, "No departure record found. Arrival requires an open departure."
+                return None, _ERR_ARRIVAL_NEEDS_DEPARTURE
+            # Update the existing departure row to arrival (same movement_id)
+            open_id = status_data.get("open_departure_movement_id")
+            if not open_id:
+                return None, _ERR_ARRIVAL_NEEDS_DEPARTURE
+            movement_at_val = movement_at or datetime.now(timezone.utc)
+            cur.execute(
+                """
+                UPDATE boat_movements
+                SET departure_at = COALESCE(departure_at, movement_at),
+                    movement_at = %s,
+                    movement_type = 'arrival',
+                    image_url = COALESCE(%s, image_url),
+                    updated_at = NOW()
+                WHERE id = %s AND boat_id = %s AND movement_type = 'departure'
+                RETURNING id, boat_id, movement_type, movement_at,
+                          partial_arrival_reason, partial_arrival_details, image_url
+                """,
+                (movement_at_val, image_url, open_id, boat_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None, _ERR_ARRIVAL_NEEDS_DEPARTURE
+            conn.commit()
+            return {
+                "id": str(row[0]),
+                "boat_id": str(row[1]),
+                "movement_type": row[2],
+                "movement_at": row[3],
+                "partial_arrival_reason": row[4],
+                "partial_arrival_details": row[5],
+                "image_url": row[6],
+            }, None
 
         if movement_type == "partial_arrival" and not partial_arrival_reason:
             return None, "partial_arrival_reason is required for partial_arrival"
@@ -413,6 +448,9 @@ def create_boat_movement(
     finally:
         cur.close()
         conn.close()
+
+
+_ERR_ARRIVAL_NEEDS_DEPARTURE = "No departure record found. Arrival requires an open departure."
 
 
 def _get_departure_movement_for_boat(

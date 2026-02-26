@@ -228,9 +228,9 @@ async def create_boat_movement(
 ):
     """
     Log a boat movement: departure, arrival, or partial arrival.
-    - Departure: Can always be logged.
-    - Arrival: Requires an open departure record (boat must be sailing).
-    - Partial arrival: Required when no departure exists; partial_arrival_reason is required.
+    - Departure: Creates a new movement (new movement id).
+    - Arrival: Updates the existing open departure for this boat (same movement id); does not create a new record.
+    - Partial arrival: Creates a new movement when no departure exists; partial_arrival_reason is required.
       If reason is 'other', partial_arrival_details is required.
     """
     movement, err = trip_service.create_boat_movement(
