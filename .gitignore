@@ -211,4 +211,12 @@ uploads/
 
 # YOLO model weights (auto-downloaded by Ultralytics if missing)
 yolov8n.pt
+yolo26n.pt
 *.pt
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.bmp
+*.DS_Store
+

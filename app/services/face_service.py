@@ -54,6 +54,92 @@ def _decode_image(image_bytes: bytes) -> Optional[np.ndarray]:
     return img
 
 
+def _iou_xyxy(
+    box_a: Tuple[float, float, float, float],
+    box_b: Tuple[float, float, float, float],
+) -> float:
+    """Compute IoU of two boxes in xyxy format [x1, y1, x2, y2]."""
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+        return 0.0
+    inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+    area_a = (ax2 - ax1) * (ay2 - ay1)
+    area_b = (bx2 - bx1) * (by2 - by1)
+    union = area_a + area_b - inter_area
+    return inter_area / union if union > 0 else 0.0
+
+
+def _nms_boxes_xyxy(
+    boxes: List[Tuple[int, int, int, int]],
+    scores: List[float],
+    iou_threshold: float = 0.5,
+) -> List[int]:
+    """
+    Non-maximum suppression on xyxy boxes. YOLO26 is NMS-free and can return
+    overlapping detections for the same person; this merges duplicates.
+    Returns indices of boxes to keep (sorted by score descending).
+    """
+    if not boxes or not scores:
+        return []
+    order = sorted(range(len(scores)), key=lambda i: -scores[i])
+    kept: List[int] = []
+    for i in order:
+        box_i = boxes[i]
+        suppress = False
+        for j in kept:
+            if _iou_xyxy(
+                (float(box_i[0]), float(box_i[1]), float(box_i[2]), float(box_i[3])),
+                (float(boxes[j][0]), float(boxes[j][1]), float(boxes[j][2]), float(boxes[j][3])),
+            ) > iou_threshold:
+                suppress = True
+                break
+        if not suppress:
+            kept.append(i)
+    return kept
+
+
+def _deduplicate_faces_by_iou(
+    faces: List[Dict[str, Any]],
+    iou_threshold: float = 0.4,
+) -> List[Dict[str, Any]]:
+    """
+    Merge face entries that refer to the same face (high bbox overlap).
+    Keeps the face with higher det_score when merging.
+    """
+    if len(faces) <= 1:
+        return faces
+    kept: List[Dict[str, Any]] = []
+    for f in faces:
+        bbox = f.get("bbox")
+        if not bbox or len(bbox) != 4:
+            kept.append(f)
+            continue
+        box = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        score = float(f.get("det_score") or 0.0)
+        duplicate_of = None
+        for i, k in enumerate(kept):
+            kb = k.get("bbox")
+            if not kb or len(kb) != 4:
+                continue
+            kbox = (float(kb[0]), float(kb[1]), float(kb[2]), float(kb[3]))
+            if _iou_xyxy(box, kbox) >= iou_threshold:
+                if score > float(k.get("det_score") or 0.0):
+                    duplicate_of = i
+                else:
+                    duplicate_of = -1
+                break
+        if duplicate_of is None:
+            kept.append(f)
+        elif duplicate_of >= 0:
+            kept[duplicate_of] = f
+    return kept
+
+
 def draw_face_boxes_on_image(
     image_bytes: bytes,
     faces: List[Dict[str, Any]],
@@ -158,6 +244,7 @@ def identify_faces_in_image(
             return {"faces": []}
 
         person_boxes: List[Tuple[int, int, int, int]] = []
+        person_scores: List[float] = []
         for r in yolo_results:
             boxes = getattr(r, "boxes", None)
             if boxes is None:
@@ -171,9 +258,15 @@ def identify_faces_in_image(
                     person_boxes.append(
                         (int(x1), int(y1), int(x2), int(y2))
                     )
+                    person_scores.append(conf)
 
         if not person_boxes:
             return {"faces": []}
+
+        # NMS on person boxes: YOLO26 is NMS-free and can return overlapping
+        # detections for the same person, causing duplicate face counts.
+        nms_keep = _nms_boxes_xyxy(person_boxes, person_scores, iou_threshold=0.5)
+        person_boxes = [person_boxes[i] for i in nms_keep]
 
         # ---- Stage 2: Face detection inside each person box ----
         for (px1, py1, px2, py2) in person_boxes:
@@ -223,6 +316,8 @@ def identify_faces_in_image(
                         "crew_member": crew_member,
                     }
                 )
+        # Deduplicate faces (same person in overlapping crops or double detections)
+        results = _deduplicate_faces_by_iou(results, iou_threshold=0.4)
     else:
         # Fallback: direct face detection on the full frame (no YOLO)
         faces = face_app.get(img)
@@ -251,6 +346,7 @@ def identify_faces_in_image(
                     "crew_member": crew_member,
                 }
             )
+        results = _deduplicate_faces_by_iou(results, iou_threshold=0.4)
 
     matched_count = sum(1 for r in results if r["is_match"])
     unmatched_count = len(results) - matched_count

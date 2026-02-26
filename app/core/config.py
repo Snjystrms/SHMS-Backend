@@ -37,8 +37,8 @@ class Settings(BaseSettings):
 
     # YOLO human detection (first stage filter for group images)
     YOLO_ENABLED: bool = True
-    # Model name/path; e.g. "yolov8n.pt" / "yolo11n.pt" / custom
-    YOLO_MODEL_NAME: str = "yolov8n.pt"
+    # Model name/path; e.g. "yolo26n.pt" (YOLO26 nano) / "yolo26s.pt" / custom
+    YOLO_MODEL_NAME: str = "yolo26n.pt"
     # Confidence threshold for person detections
     YOLO_CONF_THRESHOLD: float = 0.25
 
