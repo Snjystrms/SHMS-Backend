@@ -307,8 +307,25 @@ def _get_departure_movement_for_boat(
     return row[0], str(row[1])
 
 
+def _get_departure_movement_by_id(cur, movement_id: str) -> Optional[Tuple[str, str]]:
+    """
+    Ensure the given movement_id exists and is a departure. Returns (movement_id, boat_id) or None.
+    """
+    cur.execute(
+        """
+        SELECT id, boat_id
+        FROM boat_movements
+        WHERE id = %s AND movement_type = 'departure'
+        """,
+        (movement_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return str(row[0]), str(row[1])
+
+
 def set_boat_movement_crew(
-    boat_id: str,
     movement_id: str,
     crew_member_ids: List[str],
     unidentified_count: int,
@@ -320,9 +337,10 @@ def set_boat_movement_crew(
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        key = _get_departure_movement_for_boat(cur, boat_id, movement_id)
+        key = _get_departure_movement_by_id(cur, movement_id)
         if not key:
-            return None, "Departure movement not found for this boat"
+            return None, "Departure movement not found"
+        _movement_id, boat_id = key
 
         # Remove existing crew assignments for this movement
         cur.execute(
@@ -371,7 +389,6 @@ def set_boat_movement_crew(
 
 
 def set_boat_movement_inventory(
-    boat_id: str,
     movement_id: str,
     diesel_liters: Optional[float],
     ice_blocks: Optional[int],
@@ -386,9 +403,10 @@ def set_boat_movement_inventory(
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        key = _get_departure_movement_for_boat(cur, boat_id, movement_id)
+        key = _get_departure_movement_by_id(cur, movement_id)
         if not key:
-            return None, "Departure movement not found for this boat"
+            return None, "Departure movement not found"
+        _movement_id, boat_id = key
 
         # Remove any existing inventory row for this movement
         cur.execute(

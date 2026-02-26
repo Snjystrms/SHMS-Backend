@@ -168,23 +168,21 @@ async def create_boat_movement(
 
 
 @router.post(
-    "/boats/{boat_id}/movements/{movement_id}/crew",
+    "/movements/{movement_id}/crew",
     response_model=BoatMovementCrewResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def set_boat_movement_crew(
-    boat_id: str,
     movement_id: str,
     body: BoatMovementCrewCreate,
     current_user: dict = Depends(deps.get_admin_or_officer_user),
 ):
     """
     Port officer attaches crew list for a specific departure movement (trip).
-    Frontend should pass the movement_id returned by the departure creation API.
+    Uses movement_id returned by the departure creation API.
     """
     crew_ids = [item.crew_member_id for item in body.crew_members]
     result, err = trip_service.set_boat_movement_crew(
-        boat_id=boat_id,
         movement_id=movement_id,
         crew_member_ids=crew_ids,
         unidentified_count=0,
@@ -203,21 +201,20 @@ async def set_boat_movement_crew(
 
 
 @router.post(
-    "/boats/{boat_id}/movements/{movement_id}/inventory",
+    "/movements/{movement_id}/inventory",
     response_model=BoatMovementInventoryResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def set_boat_movement_inventory(
-    boat_id: str,
     movement_id: str,
     body: BoatMovementInventoryCreate,
     current_user: dict = Depends(deps.get_admin_or_officer_user),
 ):
     """
     Port officer records diesel, ice, fishing net count and plastic items for a trip.
+    Uses movement_id (the departure movement for this trip).
     """
     result, err = trip_service.set_boat_movement_inventory(
-        boat_id=boat_id,
         movement_id=movement_id,
         diesel_liters=body.diesel_liters,
         ice_blocks=body.ice_blocks,
