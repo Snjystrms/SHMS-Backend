@@ -30,6 +30,11 @@ from app.schemas.trip import (
     BoatMovementHistoryItem,
     HistoryDateFilter,
 )
+from app.schemas.dashboard import (
+    PortOfficerDashboardResponse,
+    PortOfficerDashboardUser,
+    TodayActivity,
+)
 from app.utils.sms import get_sms_provider
 from app.utils.uploads import save_crew_scan_image
 
@@ -71,6 +76,31 @@ def _get_sms():
 
 
 router = APIRouter()
+
+
+@router.get("/dashboard", response_model=PortOfficerDashboardResponse)
+async def get_port_officer_dashboard(
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Port officer dashboard: current user info and today's activity summary
+    (departures, arrivals, crew registration, crew verification counts).
+    """
+    counts = trip_service.get_dashboard_today_counts()
+    return PortOfficerDashboardResponse(
+        user=PortOfficerDashboardUser(
+            id=current_user.get("id", ""),
+            name=current_user.get("name", ""),
+            shift_active=True,
+        ),
+        today_activity=TodayActivity(
+            departures=counts["departures"],
+            arrivals=counts["arrivals"],
+            crew_registration=counts["crew_registration"],
+            crew_verification=counts["crew_verification"],
+            updated_at=counts["updated_at"],
+        ),
+    )
 
 
 @router.post("/boats/identify/{boat_number}", response_model=BoatIdentifyResponse)

@@ -162,6 +162,70 @@ def get_movement_history(
         conn.close()
 
 
+def get_dashboard_today_counts() -> Dict[str, Any]:
+    """
+    Return today's counts for port officer dashboard: departures, arrivals,
+    crew registrations (new crew created today), crew verifications (crew scanned at departure today).
+    """
+    now = datetime.now(timezone.utc)
+    start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Departures today
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM boat_movements
+            WHERE movement_type = 'departure' AND movement_at >= %s
+            """,
+            (start,),
+        )
+        departures = cur.fetchone()[0] or 0
+
+        # Arrivals today (full arrival only; partial_arrival is separate if needed)
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM boat_movements
+            WHERE movement_type = 'arrival' AND movement_at >= %s
+            """,
+            (start,),
+        )
+        arrivals = cur.fetchone()[0] or 0
+
+        # Crew registrations today (new crew_members created today)
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM crew_members
+            WHERE created_at >= %s AND deleted_at IS NULL
+            """,
+            (start,),
+        )
+        crew_registration = cur.fetchone()[0] or 0
+
+        # Crew verifications today (crew attached to departures that happened today)
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM boat_movement_crew bmc
+            JOIN boat_movements m ON m.id = bmc.movement_id AND m.movement_type = 'departure'
+            WHERE m.movement_at >= %s
+            """,
+            (start,),
+        )
+        crew_verification = cur.fetchone()[0] or 0
+
+        return {
+            "departures": departures,
+            "arrivals": arrivals,
+            "crew_registration": crew_registration,
+            "crew_verification": crew_verification,
+            "updated_at": now,
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+
 def get_open_departure_movement(boat_id: str) -> Optional[Dict[str, Any]]:
     """
     Return the open (unclosed) departure movement for this boat, if any.
