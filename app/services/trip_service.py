@@ -1,6 +1,6 @@
 """Trip status service: boat movement tracking (departure, arrival, partial arrival)."""
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, Tuple, List
 from app.db.session import get_db_connection
 
@@ -92,6 +92,71 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         print(f"Error fetching boat trip status: {e}")
         return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_movement_history(
+    movement_type: str,
+    date_filter: str,
+) -> List[Dict[str, Any]]:
+    """
+    Return list of movements filtered by type and date range.
+    Used by history screens (e.g. departure history with Today / 7 days / month filters).
+    """
+    if movement_type not in ("departure", "arrival", "partial_arrival"):
+        raise ValueError("Invalid movement_type")
+
+    now = datetime.now(timezone.utc)
+    if date_filter == "today":
+        start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    elif date_filter == "last_7_days":
+        start = now - timedelta(days=7)
+    elif date_filter == "last_30_days":
+        start = now - timedelta(days=30)
+    else:
+        raise ValueError("Invalid date_filter")
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                m.id,
+                m.boat_id,
+                b.boat_number,
+                b.boat_name,
+                m.movement_type,
+                m.movement_at,
+                m.port_name,
+                m.crew_count,
+                m.image_url
+            FROM boat_movements m
+            JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
+            WHERE m.movement_type = %s
+              AND m.movement_at >= %s
+            ORDER BY m.movement_at DESC
+            LIMIT 200
+            """,
+            (movement_type, start),
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "movement_id": str(r[0]),
+                "boat_id": str(r[1]),
+                "boat_number": r[2] or "",
+                "boat_name": r[3],
+                "movement_type": r[4],
+                "movement_at": r[5],
+                "port_name": r[6],
+                "crew_count": r[7],
+                "image_url": r[8],
+            }
+            for r in rows
+        ]
     finally:
         cur.close()
         conn.close()

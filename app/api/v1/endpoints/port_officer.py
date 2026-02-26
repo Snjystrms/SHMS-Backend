@@ -21,6 +21,9 @@ from app.schemas.trip import (
     ArrivalInventoryCheckRequest,
     ArrivalInventoryCheckResponse,
     ArrivalInventoryItemDiscrepancy,
+    BoatMovementHistoryResponse,
+    BoatMovementHistoryItem,
+    HistoryDateFilter,
 )
 from app.utils.sms import get_sms_provider
 from app.utils.uploads import save_crew_scan_image
@@ -121,6 +124,33 @@ async def get_boat_trip_status(
             detail="Boat not found",
         )
     return BoatTripStatusResponse(**status_data)
+
+
+@router.get(
+    "/movements/history",
+    response_model=BoatMovementHistoryResponse,
+)
+async def get_movement_history(
+    movement_type: str,
+    date_filter: HistoryDateFilter = "today",
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    History API for boat movements (e.g. Departure History tab).
+    Filters by movement_type (departure/arrival/partial_arrival) and date_filter
+    (today, last_7_days, last_30_days).
+    """
+    records_raw = trip_service.get_movement_history(
+        movement_type=movement_type,
+        date_filter=date_filter,
+    )
+    records = [BoatMovementHistoryItem(**r) for r in records_raw]
+    return BoatMovementHistoryResponse(
+        movement_type=movement_type,
+        date_filter=date_filter,
+        total_records=len(records),
+        records=records,
+    )
 
 
 @router.post(

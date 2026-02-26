@@ -212,3 +212,27 @@ class ArrivalInventoryCheckResponse(BaseModel):
     image_url: Optional[str] = None
     items: List[ArrivalInventoryItemDiscrepancy]
     all_matched: bool
+
+
+# ----- Movement history (for History screens) -----
+
+HistoryDateFilter = Literal["today", "last_7_days", "last_30_days"]
+
+
+class BoatMovementHistoryItem(BaseModel):
+    """One movement entry for history listing (e.g. Departure History)."""
+
+    movement_id: str
+    boat_id: str
+    boat_number: str
+    boat_name: Optional[str] = None
+    movement_at: datetime
+
+
+class BoatMovementHistoryResponse(BaseModel):
+    """History response containing movements for a given type and date filter."""
+
+    movement_type: Literal["departure", "arrival", "partial_arrival"]
+    date_filter: HistoryDateFilter
+    total_records: int
+    records: List[BoatMovementHistoryItem]
