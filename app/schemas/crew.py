@@ -15,6 +15,7 @@ class OfficerRegisterUserRequest(BaseModel):
     contact_number: Optional[str] = None
     emergency_contact_number: Optional[str] = None
     is_pilot: bool = False
+    crop_image_url: Optional[str] = None
 
 
 class CrewMemberBase(BaseModel):

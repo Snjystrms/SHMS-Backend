@@ -1,5 +1,7 @@
 import json
 import uuid
+from urllib.parse import urlparse
+
 import numpy as np
 from typing import Dict, List, Optional
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException, status, Depends
@@ -83,6 +85,27 @@ async def officer_register_user(
             status_code=status.HTTP_409_CONFLICT,
             detail="A crew member with this Aadhaar number already exists",
         )
+    # Optionally attach a face embedding from a previously scanned crop image URL.
+    crop_url = (body.crop_image_url or "").strip()
+    if crop_url and crew_member_id:
+        try:
+            parsed = urlparse(crop_url)
+            path_parts = [p for p in parsed.path.split("/") if p]
+            crop_id: Optional[str] = None
+            for i, part in enumerate(path_parts):
+                if part == "scan-result" and i + 1 < len(path_parts):
+                    crop_id = path_parts[i + 1]
+                    break
+            if crop_id:
+                png_bytes = _scan_result_crops.get(crop_id)
+                if png_bytes:
+                    embedding = face_service.get_embedding(png_bytes)
+                    if embedding is not None:
+                        face_service.add_face_embedding(crew_member_id, embedding)
+        except Exception:
+            # If anything goes wrong with crop handling, continue without blocking registration.
+            pass
+
     crew_member = face_service.get_crew_member_by_id(crew_member_id)
     return {
         "success": True,
