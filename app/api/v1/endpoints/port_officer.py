@@ -235,6 +235,44 @@ async def set_boat_movement_inventory(
     return BoatMovementInventoryResponse(**result)
 
 
+@router.get(
+    "/movements/{movement_id}/inventory",
+    response_model=BoatMovementInventoryResponse,
+)
+async def get_boat_movement_inventory(
+    movement_id: str,
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Fetch inventory details (diesel, ice, nets, plastics) for a specific departure movement.
+    """
+    departure = trip_service.get_departure_movement_by_id(movement_id)
+    if not departure:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Departure movement not found",
+        )
+
+    inv = trip_service.get_departure_inventory(movement_id)
+    if not inv:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Inventory not found for this movement",
+        )
+
+    return BoatMovementInventoryResponse(
+        movement_id=movement_id,
+        boat_id=departure["boat_id"],
+        diesel_liters=inv.get("diesel_liters"),
+        ice_blocks=inv.get("ice_blocks"),
+        fishing_net_count=inv.get("fishing_net_count"),
+        plastic_bottle_count=inv.get("plastic_bottle_count"),
+        plastic_bag_count=inv.get("plastic_bag_count"),
+        success=True,
+        message="Inventory fetched successfully.",
+    )
+
+
 @router.post(
     "/movements/{movement_id}/arrival/crew/scan",
     response_model=ArrivalCrewCheckResponse,
