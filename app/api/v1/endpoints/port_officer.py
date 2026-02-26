@@ -337,13 +337,13 @@ async def get_boat_movement_inventory(
     current_user: dict = Depends(deps.get_admin_or_officer_user),
 ):
     """
-    Fetch inventory details (diesel, ice, nets, plastics) for a specific departure movement.
+    Fetch inventory details (diesel, ice, nets, plastics) for a specific trip movement (departure or arrival).
     """
-    departure = trip_service.get_departure_movement_by_id(movement_id)
-    if not departure:
+    movement = trip_service.get_trip_movement_by_id(movement_id)
+    if not movement:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Departure movement not found",
+            detail="Movement not found",
         )
 
     inv = trip_service.get_departure_inventory(movement_id)
@@ -355,7 +355,7 @@ async def get_boat_movement_inventory(
 
     return BoatMovementInventoryResponse(
         movement_id=movement_id,
-        boat_id=departure["boat_id"],
+        boat_id=movement["boat_id"],
         diesel_liters=inv.get("diesel_liters"),
         ice_blocks=inv.get("ice_blocks"),
         fishing_net_count=inv.get("fishing_net_count"),
@@ -379,7 +379,7 @@ async def arrival_crew_scan(
 ):
     """
     Arrival crew identification: scan image (upload or image_url) and compare with departure crew.
-    Uses movement_id (the departure movement for this trip).
+    Uses movement_id (the trip movement — same id for departure and after arrival).
     - Present: crew was at departure and identified in arrival scan.
     - Missing: crew was at departure but not identified in arrival scan.
     - Unidentified: face detected at arrival that does not match any crew from this trip's departure (e.g. from another boat).
@@ -396,13 +396,13 @@ async def arrival_crew_scan(
             detail="Provide either an image file upload or image_url",
         )
 
-    departure = trip_service.get_departure_movement_by_id(movement_id)
-    if not departure:
+    movement = trip_service.get_trip_movement_by_id(movement_id)
+    if not movement:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Departure movement not found or not a valid departure.",
+            detail="Movement not found or not a valid trip (departure/arrival).",
         )
-    boat_id = departure["boat_id"]
+    boat_id = movement["boat_id"]
     departure_crew = trip_service.get_departure_crew_with_details(movement_id)
     departure_crew_ids = {c["id"] for c in departure_crew}
 
@@ -481,15 +481,15 @@ async def arrival_inventory_check(
 ):
     """
     Compare arrival inventory counts with departure. Returns per-item status: matched or missing.
-    Uses movement_id (the departure movement for this trip). Optionally provide loss_reasons for missing items.
+    Uses movement_id (the trip movement — same id for departure and after arrival). Optionally provide loss_reasons for missing items.
     """
-    departure = trip_service.get_departure_movement_by_id(movement_id)
-    if not departure:
+    movement = trip_service.get_trip_movement_by_id(movement_id)
+    if not movement:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Departure movement not found or not a valid departure.",
+            detail="Movement not found or not a valid trip (departure/arrival).",
         )
-    boat_id = departure["boat_id"]
+    boat_id = movement["boat_id"]
     dep_inv = trip_service.get_departure_inventory(movement_id)
 
     loss_reasons = body.loss_reasons or {}

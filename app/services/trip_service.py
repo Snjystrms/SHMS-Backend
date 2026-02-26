@@ -243,7 +243,7 @@ def get_open_departure_movement(boat_id: str) -> Optional[Dict[str, Any]]:
 def get_departure_movement_by_id(movement_id: str, boat_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Return the departure movement by id. If boat_id is given, validate it matches.
-    Used when updating by movement_id (arrival crew/inventory checks).
+    Used when updating by movement_id (set crew/inventory — only allowed for open departure).
     """
     conn = get_db_connection()
     cur = conn.cursor()
@@ -263,6 +263,50 @@ def get_departure_movement_by_id(movement_id: str, boat_id: Optional[str] = None
                 SELECT id, boat_id, movement_type, movement_at, port_name, crew_count, image_url
                 FROM boat_movements
                 WHERE id = %s AND movement_type = 'departure'
+                """,
+                (movement_id,),
+            )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "id": str(row[0]),
+            "boat_id": str(row[1]),
+            "movement_type": row[2],
+            "movement_at": row[3],
+            "port_name": row[4],
+            "crew_count": row[5],
+            "image_url": row[6],
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_trip_movement_by_id(movement_id: str, boat_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Return the trip movement by id (departure or arrival — same id after arrival is logged).
+    Use for arrival crew scan, arrival inventory check, and fetching inventory for a trip.
+    If boat_id is given, validate it matches.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        if boat_id:
+            cur.execute(
+                """
+                SELECT id, boat_id, movement_type, movement_at, port_name, crew_count, image_url
+                FROM boat_movements
+                WHERE id = %s AND boat_id = %s AND movement_type IN ('departure', 'arrival')
+                """,
+                (movement_id, boat_id),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT id, boat_id, movement_type, movement_at, port_name, crew_count, image_url
+                FROM boat_movements
+                WHERE id = %s AND movement_type IN ('departure', 'arrival')
                 """,
                 (movement_id,),
             )
