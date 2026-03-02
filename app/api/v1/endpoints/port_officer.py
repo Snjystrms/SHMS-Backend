@@ -25,7 +25,9 @@ from app.schemas.trip import (
     ArrivalUnidentifiedEntry,
     ArrivalInventoryCheckRequest,
     ArrivalInventoryCheckResponse,
+    ArrivalInventoryCheckSummary,
     ArrivalInventoryItemDiscrepancy,
+    InventoryCategorySummary,
     BoatMovementHistoryResponse,
     BoatMovementHistoryItem,
     HistoryDateFilter,
@@ -521,6 +523,28 @@ async def arrival_inventory_check(
         )
     all_matched = all(it.status == "matched" for it in items)
 
+    # Build check summary for fishing nets and plastic items (bottles + bags)
+    dep_net = int(dep_inv.get("fishing_net_count") or 0) if dep_inv else 0
+    arr_net = int(body.fishing_net_count or 0)
+    dep_plastic = int(dep_inv.get("plastic_bottle_count") or 0) + int(dep_inv.get("plastic_bag_count") or 0) if dep_inv else 0
+    arr_plastic = int(body.plastic_bottle_count or 0) + int(body.plastic_bag_count or 0)
+    net_matched = dep_net <= arr_net
+    plastic_matched = dep_plastic <= arr_plastic
+    summary = ArrivalInventoryCheckSummary(
+        fishing_nets=InventoryCategorySummary(
+            departure=dep_net,
+            arrival=arr_net,
+            status="matched" if net_matched else "missing",
+            verified=net_matched,
+        ),
+        plastic_items=InventoryCategorySummary(
+            departure=dep_plastic,
+            arrival=arr_plastic,
+            status="matched" if plastic_matched else "missing",
+            verified=plastic_matched,
+        ),
+    )
+
     image_url = body.image_url
     if image_url and not image_url.startswith("http"):
         image_url = f"{request.base_url.rstrip('/')}{image_url}" if image_url.startswith("/") else image_url
@@ -531,6 +555,7 @@ async def arrival_inventory_check(
         image_url=image_url,
         items=items,
         all_matched=all_matched,
+        summary=summary,
     )
 
 

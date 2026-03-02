@@ -204,6 +204,22 @@ class ArrivalInventoryCheckRequest(BaseModel):
     loss_reasons: Optional[Dict[str, LossReasonEntry]] = None  # key = item_name e.g. "fishing_net_count"
 
 
+class InventoryCategorySummary(BaseModel):
+    """Summary for one inventory category (departure vs arrival)."""
+
+    departure: int
+    arrival: int
+    status: Literal["matched", "missing"]
+    verified: bool  # True when status is matched
+
+
+class ArrivalInventoryCheckSummary(BaseModel):
+    """Check summary for fishing nets and plastic items (bottles + bags)."""
+
+    fishing_nets: InventoryCategorySummary
+    plastic_items: InventoryCategorySummary
+
+
 class ArrivalInventoryCheckResponse(BaseModel):
     """Comparison of departure vs arrival inventory with matched/missing and reasons."""
 
@@ -212,6 +228,7 @@ class ArrivalInventoryCheckResponse(BaseModel):
     image_url: Optional[str] = None
     items: List[ArrivalInventoryItemDiscrepancy]
     all_matched: bool
+    summary: Optional[ArrivalInventoryCheckSummary] = None
 
 
 # ----- Movement history (for History screens) -----
