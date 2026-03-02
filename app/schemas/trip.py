@@ -76,9 +76,11 @@ class BoatMovementResponse(BaseModel):
 
 
 class BoatMovementCrewMemberItem(BaseModel):
-    """One crew member assigned to a specific trip (boat movement)."""
+    """One crew member assigned to a specific trip (boat movement).
+    crop_id: optional face crop ID from scan-group-photo; used to show crew image in history."""
 
     crew_member_id: str
+    crop_id: Optional[str] = None
 
 
 class BoatMovementCrewCreate(BaseModel):

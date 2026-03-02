@@ -458,6 +458,7 @@ async def scan_group_photo(
         if crew_member_data:
             crew_member_obj = CrewMemberResponse(**crew_member_data)
 
+        crop_id: Optional[str] = None
         crop_image_url: Optional[str] = None
         bbox = f.get("bbox")
         if bbox and len(bbox) == 4:
@@ -480,6 +481,7 @@ async def scan_group_photo(
                 distance=f.get("distance"),
                 is_match=bool(f.get("is_match")),
                 crew_member=crew_member_obj,
+                crop_id=crop_id,
                 crop_image_url=crop_image_url,
             )
         )

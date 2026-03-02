@@ -540,10 +540,12 @@ def set_boat_movement_crew(
     movement_id: str,
     crew_member_ids: List[str],
     unidentified_count: int,
+    crew_crop_ids: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
     Attach crew list to a specific departure movement.
     Overwrites any existing crew entries for this movement and updates crew_count.
+    crew_crop_ids: optional mapping of crew_member_id -> crop_id for face image display.
     """
     conn = get_db_connection()
     cur = conn.cursor()
@@ -559,14 +561,16 @@ def set_boat_movement_crew(
             (movement_id,),
         )
 
+        crew_crop_ids = crew_crop_ids or {}
         unique_ids = list(dict.fromkeys(crew_member_ids)) if crew_member_ids else []
         for cid in unique_ids:
+            crop_id = crew_crop_ids.get(cid)
             cur.execute(
                 """
-                INSERT INTO boat_movement_crew (id, movement_id, crew_member_id)
-                VALUES (%s, %s, %s)
+                INSERT INTO boat_movement_crew (id, movement_id, crew_member_id, crop_id)
+                VALUES (%s, %s, %s, %s)
                 """,
-                (str(uuid.uuid4()), movement_id, cid),
+                (str(uuid.uuid4()), movement_id, cid, crop_id),
             )
 
         total_count = len(unique_ids) + max(unidentified_count or 0, 0)
@@ -715,7 +719,8 @@ def get_scanned_crew_history(
                 b.id AS boat_id,
                 b.boat_name,
                 b.boat_number,
-                m.movement_at
+                m.movement_at,
+                bmc.crop_id
             FROM boat_movements m
             JOIN boat_movement_crew bmc ON bmc.movement_id = m.id
             JOIN crew_members cm ON cm.id = bmc.crew_member_id AND cm.deleted_at IS NULL
@@ -741,6 +746,7 @@ def get_scanned_crew_history(
                 "boat_name": r[7],
                 "boat_number": r[8],
                 "movement_at": r[9].isoformat() if r[9] else None,
+                "image_url": f"/uploads/crew-crops/{r[10]}.png" if r[10] else None,
             }
             for r in rows
         ]

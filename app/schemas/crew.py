@@ -50,6 +50,7 @@ class CrewFaceScanResult(BaseModel):
     distance: Optional[float] = None
     is_match: bool
     crew_member: Optional[CrewMemberResponse] = None
+    crop_id: Optional[str] = None  # UUID for crew face crop; use when attaching crew to movement for image_url in history.
     crop_image_url: Optional[str] = None  # One-time URL to GET the cropped face/person PNG for frontend display.
 
 
@@ -80,6 +81,7 @@ class CrewScannedHistoryItem(BaseModel):
     aadhaar_number: Optional[str] = None
     emergency_contact_number: Optional[str] = None
     movement_at: Optional[str] = None
+    image_url: Optional[str] = None  # Crew face crop URL: /uploads/crew-crops/{crop_id}.png
 
 
 class CrewScannedHistoryResponse(BaseModel):

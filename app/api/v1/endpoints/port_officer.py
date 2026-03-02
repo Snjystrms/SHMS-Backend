@@ -275,12 +275,19 @@ async def set_boat_movement_crew(
     """
     Port officer attaches crew list for a specific departure movement (trip).
     Uses movement_id returned by the departure creation API.
+    Pass crop_id per crew when attaching from scan-group-photo for face image in history.
     """
     crew_ids = [item.crew_member_id for item in body.crew_members]
+    crew_crop_ids = {
+        item.crew_member_id: item.crop_id
+        for item in body.crew_members
+        if item.crop_id
+    }
     result, err = trip_service.set_boat_movement_crew(
         movement_id=movement_id,
         crew_member_ids=crew_ids,
         unidentified_count=0,
+        crew_crop_ids=crew_crop_ids,
     )
     if err:
         if "Departure movement not found" in err:
