@@ -9,6 +9,8 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: Optional[str] = None
+    aadhaar_number: Optional[str] = None
+    emergency_contact_number: Optional[str] = None
 
 
 class BoatOwnerCreate(BaseModel):
@@ -22,6 +24,8 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     password: Optional[str] = None
+    aadhaar_number: Optional[str] = None
+    emergency_contact_number: Optional[str] = None
 
 class User(UserBase):
     id: str

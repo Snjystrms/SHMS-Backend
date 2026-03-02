@@ -110,16 +110,18 @@ def create_officer_user(user_data: dict, role_id: int):
     try:
         cur.execute(
             """
-            INSERT INTO users (id, name, email, phone, password, role_id, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+            INSERT INTO users (id, name, email, phone, password, role_id, aadhaar_number, emergency_contact_number, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
             """,
             (
                 user_id,
                 user_data["name"],
                 user_data.get("email") or None,
-                user_data["phone"],
+                user_data.get("phone") or None,
                 user_data["password"],
-                role_id
+                role_id,
+                (user_data.get("aadhaar_number") or "").strip() or None,
+                (user_data.get("emergency_contact_number") or "").strip() or None,
             )
         )
         conn.commit()
@@ -139,7 +141,8 @@ def get_officers():
     try:
         cur.execute(
             """
-            SELECT u.id, u.name, u.email, u.phone, u.role_id, r.name as role_name 
+            SELECT u.id, u.name, u.email, u.phone, u.role_id, r.name as role_name,
+                   u.aadhaar_number, u.emergency_contact_number
             FROM users u
             JOIN roles r ON u.role_id = r.id
             WHERE r.name = 'officer' AND u.deleted_at IS NULL
@@ -154,7 +157,9 @@ def get_officers():
                 "email": row[2],
                 "phone": row[3],
                 "role_id": row[4],
-                "role": row[5]
+                "role": row[5],
+                "aadhaar_number": row[6],
+                "emergency_contact_number": row[7],
             })
         return officers
     except Exception as e:
@@ -203,7 +208,8 @@ def get_user_by_id(user_id: str):
     try:
         cur.execute(
             """
-            SELECT u.id, u.name, u.email, u.phone, u.role_id, r.name as role_name 
+            SELECT u.id, u.name, u.email, u.phone, u.role_id, r.name as role_name,
+                   u.aadhaar_number, u.emergency_contact_number
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
             WHERE u.id = %s AND u.deleted_at IS NULL
@@ -218,7 +224,9 @@ def get_user_by_id(user_id: str):
                 "email": row[2],
                 "phone": row[3],
                 "role_id": row[4],
-                "role": row[5]
+                "role": row[5],
+                "aadhaar_number": row[6],
+                "emergency_contact_number": row[7],
             }
         return None
     except Exception as e:
