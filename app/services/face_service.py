@@ -197,6 +197,36 @@ def crop_face_from_image(image_bytes: bytes, bbox: List[float]) -> Optional[byte
     return buf.getvalue()
 
 
+def detect_face_and_crop(image_bytes: bytes) -> Tuple[bool, Optional[bytes]]:
+    """
+    Detect a single face in the image and return a cropped face image.
+
+    Returns:
+        (face_detected, crop_bytes): face_detected is True if a face was found,
+        crop_bytes is PNG bytes of the cropped face (or None if no face).
+    """
+    img = _decode_image(image_bytes)
+    if img is None:
+        return False, None
+
+    face_app = _get_face_app()
+    faces = face_app.get(img)
+    if not faces:
+        return False, None
+
+    # Use the first (highest-confidence) face
+    face = faces[0]
+    bbox = getattr(face, "bbox", None)
+    if bbox is None or len(bbox) != 4:
+        return False, None
+
+    crop_bytes = crop_face_from_image(image_bytes, [float(x) for x in bbox])
+    if not crop_bytes:
+        return False, None
+
+    return True, crop_bytes
+
+
 def get_embedding(image_bytes: bytes) -> Optional[np.ndarray]:
     """
     Backwards‑compatible helper for single‑face flows (registration).

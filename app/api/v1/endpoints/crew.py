@@ -57,6 +57,41 @@ async def get_crew_member(
         )
     return crew_member
 
+@router.post("/crew-members/detect-face")
+async def detect_crew_face(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Accept a crew member photo from the frontend. Returns whether a face was detected
+    and a URL to the cropped face image when a face is found.
+    """
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Image file is empty",
+        )
+
+    face_detected, crop_bytes = face_service.detect_face_and_crop(image_bytes)
+
+    crop_image_url: Optional[str] = None
+    if face_detected and crop_bytes:
+        crop_id = str(uuid.uuid4())
+        _scan_result_crops[crop_id] = crop_bytes
+        save_crew_crop(crop_id, crop_bytes)
+        path = request.url_for("get_scan_result_crop", crop_id=crop_id)
+        path_str = str(path)
+        base_url = str(request.base_url).rstrip("/")
+        crop_image_url = path_str if (path_str.startswith("http://") or path_str.startswith("https://")) else f"{base_url}{path_str}"
+
+    return {
+        "face_detected": face_detected,
+        "crop_image_url": crop_image_url,
+    }
+
+
 @router.post("/crew-members/register", status_code=status.HTTP_201_CREATED)
 async def officer_register_user(
     request: Request,
