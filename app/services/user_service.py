@@ -411,6 +411,28 @@ def create_pending_crew(
         conn.close()
 
 
+def is_crew_member_registered_by_phone(phone: str) -> bool:
+    """Check if a crew member exists with this phone and is_register=true (fully registered)."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT 1 FROM crew_members
+            WHERE phone = %s AND is_register = true AND deleted_at IS NULL
+            LIMIT 1
+            """,
+            (phone.strip(),),
+        )
+        return cur.fetchone() is not None
+    except Exception as e:
+        print(f"Error checking crew member registration: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
 def get_pending_crew_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     """Fetch pending crew registration by phone. Returns None if not found. embedding is returned as list."""
     conn = get_db_connection()

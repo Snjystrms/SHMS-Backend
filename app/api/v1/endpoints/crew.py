@@ -319,6 +319,7 @@ async def verify_crew_otp(
         "contact_number": pending["phone"],
         "emergency_contact_number": pending["emergency_contact_number"],
         "is_pilot": pending["is_pilot"],
+        "is_register": True,
         "message": "Crew member created successfully"
     }
 
@@ -328,8 +329,13 @@ async def resend_crew_otp(
     req: ForgotPasswordRequest,
     current_user: dict = Depends(deps.get_admin_or_officer_user)
 ):
-    """Resend OTP for pending crew registration. Only valid if a pending registration exists for this phone."""
+    """Resend OTP for pending crew registration. Only valid for users with is_register=false (not fully registered)."""
     phone = req.mobile_number.strip()
+    if crud_user.is_crew_member_registered_by_phone(phone):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User is already registered. OTP cannot be sent.",
+        )
     pending = crud_user.get_pending_crew_by_phone(phone)
     if not pending:
         raise HTTPException(
