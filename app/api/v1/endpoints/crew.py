@@ -1,8 +1,12 @@
+import asyncio
 import json
+import logging
 import uuid
 from urllib.parse import urlparse
 
 import numpy as np
+import requests
+
 from typing import Dict, List, Optional
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException, status, Depends
 from fastapi.responses import Response
@@ -16,17 +20,19 @@ from app.schemas.crew import (
     CrewVerifyOtpRequest,
     CrewGroupScanResponse,
     CrewFaceScanResult,
-    OfficerRegisterUserRequest,
 )
 from app.schemas.user import ForgotPasswordRequest
 from app.utils.otp_helpers import get_sms
-from app.utils.uploads import save_crew_scan_image
+from app.utils.uploads import save_crew_scan_image, save_crew_crop, load_crew_crop, save_crew_embedding, load_crew_embedding
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # In-memory store for cropped face images (crop_id -> PNG bytes). Served on demand; not saved to disk.
 _scan_result_crops: Dict[str, bytes] = {}
+# Pre-computed embeddings from scan-group-photo (crop_id -> embedding list). Reused when registering.
+_scan_result_embeddings: Dict[str, List[float]] = {}
 
 @router.get("/crew-members", response_model=List[CrewMemberResponse])
 async def list_crew_members(
@@ -53,16 +59,37 @@ async def get_crew_member(
 
 @router.post("/crew-members/register", status_code=status.HTTP_201_CREATED)
 async def officer_register_user(
-    body: OfficerRegisterUserRequest,
+    request: Request,
     current_user: dict = Depends(deps.get_admin_or_officer_user),
 ):
     """
     Officer registers a user with minimum info. Compulsory: name, aadhaar_number.
     Optional: contact_number, emergency_contact_number, is_pilot.
+    Face embedding: pass crop_image_url (JSON) or face_image (multipart file).
     is_register is always set to false for this flow.
     """
-    name = (body.name or "").strip()
-    aadhaar = (body.aadhaar_number or "").strip()
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        name = ((form.get("name") or "") if isinstance(form.get("name"), str) else "").strip()
+        aadhaar = ((form.get("aadhaar_number") or "") if isinstance(form.get("aadhaar_number"), str) else "").strip()
+        contact_number = form.get("contact_number")
+        contact_number = (contact_number or "").strip() if isinstance(contact_number, str) else None
+        emergency_contact_number = form.get("emergency_contact_number")
+        emergency_contact_number = (emergency_contact_number or "").strip() if isinstance(emergency_contact_number, str) else None
+        is_pilot_val = str(form.get("is_pilot", "false")).lower() in ("true", "1", "on", "yes")
+        crop_url = ((form.get("crop_image_url") or "") if isinstance(form.get("crop_image_url"), str) else "").strip()
+        face_image = form.get("face_image")
+    else:
+        body = await request.json()
+        name = (body.get("name") or "").strip()
+        aadhaar = (body.get("aadhaar_number") or "").strip()
+        contact_number = (body.get("contact_number") or "").strip() or None
+        emergency_contact_number = (body.get("emergency_contact_number") or "").strip() or None
+        is_pilot_val = body.get("is_pilot", False) is True
+        crop_url = (body.get("crop_image_url") or "").strip()
+        face_image = None
+
     if not name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -76,35 +103,55 @@ async def officer_register_user(
     crew_member_id = face_service.register_user_minimal(
         name=name,
         aadhaar_number=aadhaar,
-        contact_number=body.contact_number,
-        emergency_contact_number=body.emergency_contact_number,
-        is_pilot=body.is_pilot,
+        contact_number=contact_number,
+        emergency_contact_number=emergency_contact_number,
+        is_pilot=is_pilot_val,
     )
     if not crew_member_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A crew member with this Aadhaar number already exists",
         )
-    # Optionally attach a face embedding from a previously scanned crop image URL.
-    crop_url = (body.crop_image_url or "").strip()
-    if crop_url and crew_member_id:
+    # Optionally attach a face embedding from face_image (file) or crop_image_url.
+    embedding: Optional[np.ndarray] = None
+    if face_image and hasattr(face_image, "read"):
+        png_bytes = await face_image.read()
+        embedding = face_service.get_embedding(png_bytes)
+    elif crop_url and crew_member_id:
+        crop_id: Optional[str] = None
         try:
             parsed = urlparse(crop_url)
             path_parts = [p for p in parsed.path.split("/") if p]
-            crop_id: Optional[str] = None
             for i, part in enumerate(path_parts):
                 if part == "scan-result" and i + 1 < len(path_parts):
                     crop_id = path_parts[i + 1]
                     break
-            if crop_id:
-                png_bytes = _scan_result_crops.get(crop_id)
+        except Exception as parse_err:
+            logger.warning("Failed to parse crop_image_url: %s", parse_err)
+            crop_id = None
+        if crop_id:
+            # Prefer pre-computed embedding from scan-group-photo (no re-detection)
+            emb_list = _scan_result_embeddings.get(crop_id) or load_crew_embedding(crop_id)
+            if emb_list:
+                embedding = np.array(emb_list, dtype=np.float32)
+            else:
+                png_bytes = _scan_result_crops.get(crop_id) or load_crew_crop(crop_id)
+                if not png_bytes and crop_url.startswith(("http://", "https://")):
+                    try:
+                        resp = await asyncio.to_thread(requests.get, crop_url, timeout=10)
+                        if resp.status_code == 200 and resp.content:
+                            png_bytes = resp.content
+                    except Exception as fetch_err:
+                        logger.warning("Failed to fetch crop_image_url: %s", fetch_err)
                 if png_bytes:
                     embedding = face_service.get_embedding(png_bytes)
-                    if embedding is not None:
-                        face_service.add_face_embedding(crew_member_id, embedding)
-        except Exception:
-            # If anything goes wrong with crop handling, continue without blocking registration.
-            pass
+    embedding_added = False
+    if embedding is not None:
+        if face_service.add_face_embedding(crew_member_id, embedding):
+            embedding_added = True
+            logger.info("Face embedding added for crew_member_id=%s", crew_member_id)
+        else:
+            logger.warning("add_face_embedding failed for crew_member_id=%s", crew_member_id)
 
     crew_member = face_service.get_crew_member_by_id(crew_member_id)
     return {
@@ -112,6 +159,7 @@ async def officer_register_user(
         "id": crew_member_id,
         "message": "User registered successfully (is_register=false)",
         "crew_member": crew_member,
+        "embedding_added": embedding_added,
     }
 
 
@@ -315,6 +363,8 @@ async def get_scan_result_crop(crop_id: str):
     """Serve a cropped face/person image for a scan result. No auth required."""
     png_bytes = _scan_result_crops.get(crop_id)
     if png_bytes is None:
+        png_bytes = load_crew_crop(crop_id)
+    if png_bytes is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Crop image not found",
@@ -380,6 +430,11 @@ async def scan_group_photo(
             if crop_bytes:
                 crop_id = str(uuid.uuid4())
                 _scan_result_crops[crop_id] = crop_bytes
+                save_crew_crop(crop_id, crop_bytes)
+                emb = f.get("embedding")
+                if emb is not None:
+                    _scan_result_embeddings[crop_id] = emb
+                    save_crew_embedding(crop_id, emb)
                 path = request.url_for("get_scan_result_crop", crop_id=crop_id)
                 path_str = str(path)
                 crop_image_url = path_str if (path_str.startswith("http://") or path_str.startswith("https://")) else f"{base_url}{path_str}"

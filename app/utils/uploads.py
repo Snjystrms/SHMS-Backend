@@ -1,8 +1,9 @@
 """Save uploaded boat documents (PDF or image) to disk. Returns path to store in DB."""
+import json
 import os
 import re
 import uuid
-from typing import Tuple, Optional
+from typing import List, Optional, Tuple
 
 # Allowed MIME types for boat document
 ALLOWED_BOAT_DOCUMENT_TYPES = {
@@ -63,6 +64,69 @@ def _ext_for_content_type(ct: str) -> str:
     if ct == "image/png":
         return ".png"
     return ".bin"
+
+
+def save_crew_crop(crop_id: str, content: bytes, upload_root: Optional[str] = None) -> bool:
+    """
+    Save crew face crop to uploads/crew-crops/<crop_id>.png.
+    Persists crops so they survive server restarts (used for register with crop_image_url).
+    """
+    if not crop_id or not content:
+        return False
+    root = upload_root or os.path.join(os.getcwd(), "uploads", "crew-crops")
+    os.makedirs(root, exist_ok=True)
+    file_path = os.path.join(root, f"{crop_id}.png")
+    try:
+        with open(file_path, "wb") as f:
+            f.write(content)
+        return True
+    except OSError:
+        return False
+
+
+def load_crew_crop(crop_id: str, upload_root: Optional[str] = None) -> Optional[bytes]:
+    """Load crew face crop from disk. Returns None if not found."""
+    if not crop_id:
+        return None
+    root = upload_root or os.path.join(os.getcwd(), "uploads", "crew-crops")
+    file_path = os.path.join(root, f"{crop_id}.png")
+    if not os.path.exists(file_path):
+        return None
+    try:
+        with open(file_path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def save_crew_embedding(crop_id: str, embedding: List[float], upload_root: Optional[str] = None) -> bool:
+    """Save face embedding for a crop. Used when registering from scan-group-photo."""
+    if not crop_id or not embedding:
+        return False
+    root = upload_root or os.path.join(os.getcwd(), "uploads", "crew-crops")
+    os.makedirs(root, exist_ok=True)
+    file_path = os.path.join(root, f"{crop_id}.embedding.json")
+    try:
+        with open(file_path, "w") as f:
+            json.dump(embedding, f)
+        return True
+    except OSError:
+        return False
+
+
+def load_crew_embedding(crop_id: str, upload_root: Optional[str] = None) -> Optional[List[float]]:
+    """Load face embedding for a crop. Returns None if not found."""
+    if not crop_id:
+        return None
+    root = upload_root or os.path.join(os.getcwd(), "uploads", "crew-crops")
+    file_path = os.path.join(root, f"{crop_id}.embedding.json")
+    if not os.path.exists(file_path):
+        return None
+    try:
+        with open(file_path, "r") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def save_crew_scan_image(content: bytes, upload_root: Optional[str] = None) -> Optional[str]:

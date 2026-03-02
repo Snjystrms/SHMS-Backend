@@ -314,6 +314,7 @@ def identify_faces_in_image(
                         "distance": float(distance) if distance is not None else None,
                         "is_match": is_match,
                         "crew_member": crew_member,
+                        "embedding": embedding.tolist(),
                     }
                 )
         # Deduplicate faces (same person in overlapping crops or double detections)
@@ -344,6 +345,7 @@ def identify_faces_in_image(
                     "distance": float(distance) if distance is not None else None,
                     "is_match": is_match,
                     "crew_member": crew_member,
+                    "embedding": embedding.tolist(),
                 }
             )
         results = _deduplicate_faces_by_iou(results, iou_threshold=0.4)
