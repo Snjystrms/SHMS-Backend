@@ -1,11 +1,27 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from app.services import user_service as crud_user
+from app.services import user_service as crud_user, notification_service
 from app.schemas.user import UserCreate, UserUpdate, BoatUpdate
 from app.api import deps
 from app.core import security
 
 router = APIRouter()
+
+# ==================== Notifications ====================
+
+@router.get("/notifications")
+async def list_notifications(
+    limit: Optional[int] = 50,
+    unread_only: bool = False,
+    current_admin: dict = Depends(deps.get_admin_user),
+):
+    """List notifications for admin (e.g. boat not registered alerts)."""
+    notifications = notification_service.list_admin_notifications(
+        limit=limit or 50,
+        unread_only=unread_only,
+    )
+    return {"success": True, "notifications": notifications}
+
 
 @router.post("/officers", status_code=status.HTTP_201_CREATED)
 async def create_officer_account(

@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request
 from app.api import deps
 from app.core.config import settings
-from app.services import user_service, trip_service, face_service
+from app.services import user_service, trip_service, face_service, notification_service
 from app.schemas.user import BoatIdentifyResponse, PendingBoatRegisterRequest
 from app.schemas.crew import (
     CrewScannedHistoryResponse,
@@ -598,6 +598,19 @@ async def register_pending_boat(
     sms = _get_sms()
     message = "This boat is not registered. Please register."
     sms.send_message(mobile_number, message)
+
+    # Notify admin that this boat is not registered (high priority)
+    notification_service.create_notification(
+        notification_type="boat_not_registered",
+        title="Boat not registered",
+        message=f"Boat {boat_number} is not registered. SMS sent to owner ({mobile_number}).",
+        metadata={
+            "boat_id": boat_id,
+            "boat_number": boat_number,
+            "owner_mobile": mobile_number,
+        },
+        priority="high",
+    )
 
     return {
         "success": True,
