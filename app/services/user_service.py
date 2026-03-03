@@ -201,6 +201,37 @@ def get_boat_owners():
         cur.close()
         conn.close()
 
+
+def get_agent_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+    """Fetch agent by phone. Returns None if not found or not agent role."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT u.id, u.name, u.email, u.phone
+            FROM users u
+            JOIN roles r ON u.role_id = r.id
+            WHERE u.phone = %s AND r.name = 'agent' AND u.deleted_at IS NULL
+            """,
+            (phone.strip(),),
+        )
+        row = cur.fetchone()
+        if row:
+            return {
+                "id": str(row[0]),
+                "name": row[1],
+                "email": row[2],
+                "phone": row[3],
+            }
+        return None
+    except Exception as e:
+        print(f"Error fetching agent by phone: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
 def get_user_by_id(user_id: str):
     """Fetch a user by their ID."""
     conn = get_db_connection()
