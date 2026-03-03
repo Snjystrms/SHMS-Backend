@@ -5,20 +5,26 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.utils import get_local_ip
 from app.core.exceptions import (
-    AppException, 
-    app_exception_handler, 
-    http_exception_handler
+    AppException,
+    app_exception_handler,
+    http_exception_handler,
 )
 from fastapi import HTTPException
+from pathlib import Path
 
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json"
+    openapi_url=f"{settings.API_V1_STR}/openapi.json",
 )
 
+# Resolve and ensure the uploads directory exists before mounting (important for Render)
+BASE_DIR = Path(__file__).resolve().parent.parent
+UPLOADS_DIR = BASE_DIR / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
 # Serve uploaded files (boat documents) from /uploads/...
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 # Register exception handlers
 app.add_exception_handler(AppException, app_exception_handler)
