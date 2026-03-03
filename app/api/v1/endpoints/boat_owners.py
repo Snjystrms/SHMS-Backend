@@ -3,7 +3,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, File, Form, HTTPException, status, UploadFile
 from app.core import security
 from app.core.config import settings
-from app.services import user_service as crud_user
+from app.services import user_service as crud_user, notification_service
 from app.schemas.token import Token
 from app.schemas.user import BoatOwnerCreate, BoatCreate, BoatUpdate, ForgotPasswordRequest, BoatOwnerVerifyOtpRequest
 from app.api import deps
@@ -13,6 +13,24 @@ from app.utils.uploads import ALLOWED_BOAT_DOCUMENT_TYPES, save_boat_document
 router = APIRouter()
 
 BOAT_OWNER_NOT_FOUND_DETAIL = "No boat owner found with this mobile number"
+
+
+@router.get("/notifications")
+async def list_my_notifications(
+    limit: int = 50,
+    unread_only: bool = False,
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """
+    List notifications for the authenticated boat owner.
+    Returns only notifications whose metadata.boat_owner_id matches the current user.
+    """
+    notifications = notification_service.list_boat_owner_notifications(
+        boat_owner_id=current_user["id"],
+        limit=limit or 50,
+        unread_only=unread_only,
+    )
+    return {"success": True, "notifications": notifications}
 
 
 def _token_response(user: dict):

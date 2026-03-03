@@ -259,6 +259,61 @@ async def create_boat_movement(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create boat movement",
         )
+
+    # Create notifications for admin and boat owner about this movement.
+    movement_type = movement.get("movement_type")
+    boat = user_service.get_boat_by_id(boat_id)
+    boat_number = boat.get("boat_number") if boat else None
+    boat_name = boat.get("boat_name") if boat else None
+    boat_owner_id = boat.get("boat_owner_id") if boat else None
+
+    if movement_type in {"departure", "arrival", "partial_arrival"}:
+        if movement_type == "departure":
+            title_suffix = "Departure logged"
+            message_suffix = "has departed."
+        elif movement_type == "arrival":
+            title_suffix = "Arrival logged"
+            message_suffix = "has arrived."
+        else:
+            title_suffix = "Partial arrival logged"
+            message_suffix = "has logged a partial arrival."
+
+        boat_label = boat_number or boat_name or boat_id
+        movement_at = movement.get("movement_at")
+        movement_at_str = movement_at.isoformat() if hasattr(movement_at, "isoformat") else None
+
+        metadata = {
+            "boat_id": boat_id,
+            "boat_number": boat_number,
+            "boat_name": boat_name,
+            "boat_owner_id": boat_owner_id,
+            "movement_id": movement.get("id"),
+            "movement_type": movement_type,
+            "movement_at": movement_at_str,
+            "partial_arrival_reason": movement.get("partial_arrival_reason"),
+            "partial_arrival_details": movement.get("partial_arrival_details"),
+        }
+
+        # Admin notification
+        notification_service.create_notification(
+            notification_type=f"boat_{movement_type}",
+            title=f"Boat {boat_label}: {title_suffix}",
+            message=f"Boat {boat_label} {message_suffix}",
+            metadata=metadata,
+            priority="medium" if movement_type in {"departure", "arrival"} else "high",
+        )
+
+        # Boat owner notification (if linked owner exists)
+        if boat_owner_id:
+            notification_service.create_notification(
+                notification_type=f"boat_{movement_type}",
+                title=f"Your boat {boat_label}: {title_suffix}",
+                message=f"Your boat {boat_label} {message_suffix}",
+                metadata=metadata,
+                recipient_role="boat_owner",
+                priority="normal",
+            )
+
     return BoatMovementResponse(**movement)
 
 

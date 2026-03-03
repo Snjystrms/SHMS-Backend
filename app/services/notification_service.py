@@ -61,7 +61,7 @@ def list_admin_notifications(
 
         cur.execute(query, params)
         rows = cur.fetchall()
-        notifications = []
+        notifications: List[Dict[str, Any]] = []
         for row in rows:
             notifications.append({
                 "id": str(row[0]),
@@ -76,6 +76,59 @@ def list_admin_notifications(
         return notifications
     except Exception as e:
         print(f"Error listing notifications: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def list_boat_owner_notifications(
+    boat_owner_id: str,
+    limit: int = 50,
+    unread_only: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    List notifications for a specific boat owner.
+    Filters by recipient_role='boat_owner' and metadata.boat_owner_id == given id.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        query = """
+            SELECT id, type, title, message, metadata, created_at, read_at, priority
+            FROM notifications
+            WHERE recipient_role = 'boat_owner'
+        """
+        params: List[Any] = []
+        if unread_only:
+            query += " AND read_at IS NULL"
+        query += " ORDER BY created_at DESC LIMIT %s"
+        params.append(limit)
+
+        cur.execute(query, params)
+        rows = cur.fetchall()
+        notifications: List[Dict[str, Any]] = []
+        for row in rows:
+            meta = row[4] or {}
+            try:
+                owner_in_meta = str(meta.get("boat_owner_id")) if isinstance(meta, dict) else None
+            except Exception:
+                owner_in_meta = None
+            if owner_in_meta and owner_in_meta != str(boat_owner_id):
+                continue
+            notifications.append({
+                "id": str(row[0]),
+                "type": row[1],
+                "title": row[2],
+                "message": row[3],
+                "metadata": meta,
+                "created_at": row[5].isoformat() if row[5] else None,
+                "read_at": row[6].isoformat() if row[6] else None,
+                "priority": row[7] or "normal",
+            })
+        return notifications
+    except Exception as e:
+        print(f"Error listing boat owner notifications: {e}")
         return []
     finally:
         cur.close()
