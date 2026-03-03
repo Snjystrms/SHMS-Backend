@@ -5,8 +5,12 @@ opencv-python
 numpy==1.26.4
 psycopg2-binary
 python-multipart
+onnxruntime>=1.19.0
 Pillow
+<<<<<<< Updated upstream
 onnxruntime==1.24.2
+=======
+>>>>>>> Stashed changes
 python-dotenv
 SQLAlchemy
 alembic

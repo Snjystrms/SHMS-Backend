@@ -24,11 +24,12 @@ cp .env.example .env
 # 5. Run migrations
 alembic upgrade head
 
-# 6. Start server
-uvicorn app.main:app --reload
+# 6. Start server (use run script so Expo/frontend can reach API at http://<your-ip>:8000)
+chmod +x run.sh && ./run.sh
+# Or: uvicorn app.main:app --reload --host 0.0.0.0
 ```
 
-**API docs:** http://127.0.0.1:8000/docs
+**API docs:** http://127.0.0.1:8000/docs (or http://\<your-lan-ip\>:8000/docs)
 
 ---
 

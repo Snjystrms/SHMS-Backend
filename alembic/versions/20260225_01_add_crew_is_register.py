@@ -1,7 +1,7 @@
 """add is_register to crew_members (default false for officer-added minimal registrations)
 
 Revision ID: 20260225_01
-Revises: 20260224_02
+Revises: 20260224_03_auction
 Create Date: 2026-02-25
 
 """
@@ -10,7 +10,7 @@ from alembic import op
 
 
 revision = "20260225_01"
-down_revision = "20260224_02"
+down_revision = "20260224_03_auction"
 branch_labels = None
 depends_on = None
 
