@@ -51,6 +51,15 @@ def _decode_image(image_bytes: bytes) -> Optional[np.ndarray]:
     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
     if img is None:
         return None
+    # Cap input resolution to reduce per-request RAM/VRAM during inference.
+    h, w = img.shape[:2]
+    max_side = max(h, w)
+    target_max_side = 1024
+    if max_side > target_max_side:
+        scale = float(target_max_side) / float(max_side)
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
     return img
 
 
