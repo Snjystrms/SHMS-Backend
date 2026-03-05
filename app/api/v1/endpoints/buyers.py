@@ -11,16 +11,16 @@ from app.services.otp_registration_service import (
 )
 from app.schemas.token import Token
 from app.schemas.user import (
-    AgentRegisterRequest,
-    AgentVerifyOtpRequest,
+    BuyerRegisterRequest,
+    BuyerVerifyOtpRequest,
     ForgotPasswordRequest,
 )
-from app.utils.otp_helpers import get_sms, send_otp_for_phone
+from app.utils.otp_helpers import send_otp_for_phone
 
 
 router = APIRouter()
 
-AGENT_NOT_FOUND_DETAIL = "No agent found with this mobile number"
+BUYER_NOT_FOUND_DETAIL = "No buyer found with this mobile number"
 
 
 def _token_response(user: dict):
@@ -42,57 +42,50 @@ def _token_response(user: dict):
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-async def register_agent(agent_data: AgentRegisterRequest):
+async def register_buyer(buyer_data: BuyerRegisterRequest):
     """
-    Step 1 (Agent Registration):
-
-    - Accepts name and mobile number (and optional Aadhaar).
+    Buyer Registration:
+    - Accepts name and mobile number.
     - Stores a pending registration in temp_users.
-    - Sends OTP to the given mobile number.
-    - Agent account is created only after OTP verification during login.
+    - Sends OTP to the mobile number.
+    - Buyer user is created after OTP verification during login.
     """
-    phone = agent_data.phone.strip()
-    name = agent_data.name.strip()
+    phone = buyer_data.phone.strip()
+    name = buyer_data.name.strip()
 
     return start_temp_user_registration(
         name=name,
         phone=phone,
-        duplicate_check=crud_user.get_agent_by_phone,
-        duplicate_error_detail="An agent with this mobile number already exists",
-        success_message="OTP sent to your mobile. Verify to complete agent registration.",
+        duplicate_check=crud_user.get_buyer_by_phone,
+        duplicate_error_detail="A buyer with this mobile number already exists",
+        success_message="OTP sent to your mobile. Verify to complete buyer registration.",
     )
 
 
 @router.post("/login/send-otp")
-async def agent_send_otp(req: ForgotPasswordRequest):
-    """
-    Step 2a (Existing Agent Login):
-
-    - Accepts mobile_number.
-    - Sends an OTP to the agent's mobile (agent must already exist).
-    """
+async def buyer_send_otp(req: ForgotPasswordRequest):
+    """Send OTP to buyer's mobile for login. Buyer must already exist."""
     return send_otp_for_phone(
         req.mobile_number.strip(),
-        crud_user.get_agent_by_phone,
-        AGENT_NOT_FOUND_DETAIL,
+        crud_user.get_buyer_by_phone,
+        BUYER_NOT_FOUND_DETAIL,
     )
 
 
 @router.post("/login/verify", response_model=Token)
-async def agent_verify_otp(req: AgentVerifyOtpRequest):
+async def buyer_verify_otp(req: BuyerVerifyOtpRequest):
     """
-    Step 2b (OTP Verification for Registration/Login):
-
-    - Verifies OTP for the given mobile number.
-    - If a temp_user exists for this phone, creates an 'agent' user and logs them in.
-    - If the agent already exists, simply logs them in.
+    Buyer OTP verification:
+    - Verifies OTP.
+    - If temp_user exists, creates a 'buyer' user and logs them in.
+    - Else logs in existing buyer.
     """
     phone = req.mobile_number.strip()
     user = verify_otp_and_login_with_role(
         phone=phone,
         otp=req.otp,
-        role_name="agent",
-        get_user_by_phone=crud_user.get_agent_by_phone,
+        role_name="buyer",
+        get_user_by_phone=crud_user.get_buyer_by_phone,
     )
     return _token_response(user)
 

@@ -4,6 +4,10 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, status, Uploa
 from app.core import security
 from app.core.config import settings
 from app.services import user_service as crud_user, notification_service
+from app.services.otp_registration_service import (
+    start_temp_user_registration,
+    verify_otp_and_login_with_role,
+)
 from app.schemas.token import Token
 from app.schemas.user import BoatOwnerCreate, BoatCreate, BoatUpdate, ForgotPasswordRequest, BoatOwnerVerifyOtpRequest
 from app.api import deps
@@ -59,41 +63,22 @@ async def register_boat_owner(user_data: BoatOwnerCreate):
     """
     phone = user_data.phone.strip()
     name = user_data.name.strip()
+
+    # Preserve existing name uniqueness check for boat owners
     existing_by_name = crud_user.get_boat_owner_by_name(name)
     if existing_by_name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="A boat owner with this name already exists",
         )
-    # existing_boat_owner = crud_user.get_boat_owner_by_phone(phone)
-    # if existing_boat_owner:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_400_BAD_REQUEST,
-    #         detail="A boat owner with this mobile number already exists",
-    #     )
-    if not crud_user.create_temp_user(name, phone):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to save registration",
-        )
-    otp, ok = crud_user.create_and_store_otp(phone, settings.SMS_OTP_EXPIRE_MINUTES)
-    if not ok or not otp:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate OTP",
-        )
-    sms = get_sms()
-    if not sms.send_otp(phone, otp):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to send OTP",
-        )
-    return {
-        "success": True,
-        "message": "OTP sent to your mobile. Verify to complete registration.",
-        "masked_mobile": crud_user.mask_mobile(phone),
-        "expires_in_minutes": settings.SMS_OTP_EXPIRE_MINUTES,
-    }
+
+    return start_temp_user_registration(
+        name=name,
+        phone=phone,
+        duplicate_check=crud_user.get_boat_owner_by_phone,
+        duplicate_error_detail="A boat owner with this mobile number already exists",
+        success_message="OTP sent to your mobile. Verify to complete registration.",
+    )
 
 
 @router.post("/login/send-otp")
@@ -110,37 +95,12 @@ async def boat_owner_send_otp(req: ForgotPasswordRequest):
 async def boat_owner_verify_otp(req: BoatOwnerVerifyOtpRequest):
     """Verify OTP: if temp_user exists, create user then return token; else login existing boat owner."""
     phone = req.mobile_number.strip()
-    if not crud_user.verify_otp(phone, req.otp):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP")
-    temp = crud_user.get_temp_user_by_phone(phone)
-    if temp:
-        role_id = crud_user.get_role_id_by_name("boat_owner")
-        if not role_id:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Boat owner role not found",
-            )
-        new_user_dict = {"name": temp["name"], "phone": phone}
-        user_id = crud_user.create_user(new_user_dict, role_id)
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to complete registration",
-            )
-        crud_user.delete_temp_user_by_phone(phone)
-        user = crud_user.get_user_by_id(user_id)
-        if not user:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User data not found")
-        return _token_response(user)
-    owner = crud_user.get_boat_owner_by_phone(phone)
-    if not owner:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=BOAT_OWNER_NOT_FOUND_DETAIL,
-        )
-    user = crud_user.get_user_by_id(owner["id"])
-    if not user:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User data not found")
+    user = verify_otp_and_login_with_role(
+        phone=phone,
+        otp=req.otp,
+        role_name="boat_owner",
+        get_user_by_phone=crud_user.get_boat_owner_by_phone,
+    )
     return _token_response(user)
 
 
