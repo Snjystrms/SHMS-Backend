@@ -7,7 +7,6 @@ import cv2
 import numpy as np
 from insightface.app import FaceAnalysis
 from PIL import Image, ImageDraw
-from ultralytics import YOLO
 
 from app.core.config import settings
 from app.db.session import get_db_connection
@@ -30,7 +29,7 @@ def _get_face_app() -> FaceAnalysis:
 
 
 @lru_cache
-def _get_yolo_model() -> Optional[YOLO]:
+def _get_yolo_model() -> Optional[Any]:
     """
     Initialize and cache YOLO model for human detection.
 
@@ -39,6 +38,11 @@ def _get_yolo_model() -> Optional[YOLO]:
     """
     if not settings.YOLO_ENABLED:
         return None
+
+    # Lazy import so Ultralytics / PyTorch are only loaded when YOLO
+    # is actually enabled and used (saves baseline RAM on small hosts).
+    from ultralytics import YOLO
+
     model = YOLO(settings.YOLO_MODEL_NAME)
     return model
 
@@ -54,7 +58,7 @@ def _decode_image(image_bytes: bytes) -> Optional[np.ndarray]:
     # Cap input resolution to reduce per-request RAM/VRAM during inference.
     h, w = img.shape[:2]
     max_side = max(h, w)
-    target_max_side = 1024
+    target_max_side = 640
     if max_side > target_max_side:
         scale = float(target_max_side) / float(max_side)
         new_w = max(1, int(round(w * scale)))
