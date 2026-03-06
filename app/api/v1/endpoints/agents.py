@@ -1,10 +1,14 @@
 from datetime import timedelta
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends, Query
 
 from app.core import security
 from app.core.config import settings
+from app.api import deps
 from app.services import user_service as crud_user
+from app.services import trip_service, notification_service
+from app.services import bidding_service
 from app.services.otp_registration_service import (
     start_temp_user_registration,
     verify_otp_and_login_with_role,
@@ -16,6 +20,13 @@ from app.schemas.user import (
     ForgotPasswordRequest,
 )
 from app.utils.otp_helpers import get_sms, send_otp_for_phone
+from app.schemas.agent_dashboard import AgentDashboardResponse, AgentArrivedBoatItem
+from app.schemas.bidding import (
+    BiddingRequestCreate,
+    BiddingRequestResponse,
+    BiddingRequestItem,
+    BiddingRequestListResponse,
+)
 
 
 router = APIRouter()
@@ -95,4 +106,84 @@ async def agent_verify_otp(req: AgentVerifyOtpRequest):
         get_user_by_phone=crud_user.get_agent_by_phone,
     )
     return _token_response(user)
+
+
+@router.get("/dashboard", response_model=AgentDashboardResponse)
+async def get_agent_dashboard(
+    current_user: dict = Depends(deps.get_agent_user),
+):
+    data = trip_service.get_agent_dashboard_arrivals()
+    arrived_boats = [AgentArrivedBoatItem(**b) for b in (data.get("arrived_boats") or [])]
+    return AgentDashboardResponse(
+        arrived_boats_count=int(data.get("arrived_boats_count") or 0),
+        arrived_boats=arrived_boats,
+    )
+
+
+@router.post(
+    "/bidding-request",
+    response_model=BiddingRequestResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def send_bidding_request(
+    body: BiddingRequestCreate,
+    current_user: dict = Depends(deps.get_agent_user),
+):
+    """
+    Agent sends a bidding request for an arrived boat.
+    The request is stored as 'pending' and a notification is sent to the boat owner.
+    """
+    result, err = bidding_service.create_bidding_request(
+        boat_id=body.boat_id,
+        agent_id=current_user["id"],
+        note=body.note,
+    )
+    if err:
+        if "not found" in err.lower():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err)
+        if "already have a pending" in err.lower():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=err)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
+
+    boat_label = result.get("boat_number") or result.get("boat_name") or body.boat_id
+    agent_name = result.get("agent_name") or "An agent"
+
+    notification_service.create_notification(
+        notification_type="bidding_request",
+        title=f"New bidding request for {boat_label}",
+        message=f"{agent_name} has requested to bid on boat {boat_label}.",
+        metadata={
+            "bidding_request_id": result["id"],
+            "boat_id": body.boat_id,
+            "boat_number": result.get("boat_number"),
+            "boat_name": result.get("boat_name"),
+            "agent_id": current_user["id"],
+            "agent_name": agent_name,
+        },
+        recipient_role="boat_owner",
+        priority="medium",
+    )
+
+    return BiddingRequestResponse(
+        success=True,
+        message="Bidding request sent to boat owner",
+        bidding_request=BiddingRequestItem(**{k: v for k, v in result.items() if k != "boat_owner_id"}),
+    )
+
+
+@router.get("/bidding-requests", response_model=BiddingRequestListResponse)
+async def list_my_bidding_requests(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    current_user: dict = Depends(deps.get_agent_user),
+):
+    """List all bidding requests sent by the current agent."""
+    requests = bidding_service.list_bidding_requests_for_agent(
+        agent_id=current_user["id"],
+        status_filter=status_filter,
+    )
+    return BiddingRequestListResponse(
+        success=True,
+        total=len(requests),
+        bidding_requests=[BiddingRequestItem(**r) for r in requests],
+    )
 

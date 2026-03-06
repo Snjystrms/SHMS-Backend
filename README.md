@@ -25,7 +25,7 @@ cp .env.example .env
 alembic upgrade head
 
 # 6. Start server
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --host 0.0.0.0
 ```
 
 **API docs:** http://127.0.0.1:8000/docs
@@ -128,7 +128,7 @@ You should **separate real secrets from examples**.
 ## ▶️ Run the Server
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --host 0.0.0.0
 ```
 
 Open Swagger UI:
