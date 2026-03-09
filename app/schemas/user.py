@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, EmailStr
 
 class UserBase(BaseModel):
@@ -126,3 +126,13 @@ class BoatIdentifyResponse(BaseModel):
     boat_type: Optional[str] = None
     last_logged_departure: Optional[str] = None  # e.g. "3 days ago" when departure tracking exists
     boat_id: str
+
+
+class BoatScanResponse(BaseModel):
+    """Response from boat image scan / OCR for registration number extraction."""
+    success: bool
+    boat_number: Optional[str] = None
+    confidence: Optional[float] = None
+    all_detected_text: List[str] = []
+    boat: Optional[BoatIdentifyResponse] = None
+    message: str = ""

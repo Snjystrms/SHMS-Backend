@@ -5,7 +5,6 @@ opencv-python-headless
 numpy==1.26.4
 psycopg2-binary
 python-multipart
-onnxruntime>=1.19.0
 Pillow
 onnxruntime==1.23.2
 python-dotenv
@@ -21,6 +20,7 @@ dotenv
 torch==2.5.1+cpu; platform_system == "Linux" and platform_machine == "x86_64"
 torchvision==0.20.1+cpu; platform_system == "Linux" and platform_machine == "x86_64"
 ultralytics==8.4.20
+easyocr
 
 # Optional: for SMS_PROVIDER=twilio
 twilio

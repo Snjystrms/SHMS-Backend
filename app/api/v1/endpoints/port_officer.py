@@ -6,8 +6,8 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request
 from app.api import deps
 from app.core.config import settings
-from app.services import user_service, trip_service, face_service, notification_service
-from app.schemas.user import BoatIdentifyResponse, PendingBoatRegisterRequest
+from app.services import user_service, trip_service, face_service, notification_service, boat_scan_service
+from app.schemas.user import BoatIdentifyResponse, BoatScanResponse, PendingBoatRegisterRequest
 from app.schemas.crew import (
     CrewScannedHistoryResponse,
     CrewScannedHistoryItem,
@@ -143,6 +143,67 @@ async def identify_boat(
         boat_type=boat.get("boat_type"),
         last_logged_departure=last_departure,
         boat_id=boat["id"],
+    )
+
+
+@router.post("/boats/scan-number", response_model=BoatScanResponse)
+async def scan_boat_number(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Scan a boat image to extract the registration number using OCR.
+    Accepts an image upload (JPEG/PNG). Returns the detected Indian fishing
+    boat registration number and, if found in the database, full boat details.
+    """
+    if not file or not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Image file is required",
+        )
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
+
+    result = boat_scan_service.scan_boat_number(image_bytes)
+    boat_number = result.get("boat_number")
+
+    boat_details = None
+    if boat_number:
+        boat = user_service.get_boat_by_number_with_owner(boat_number)
+        if boat:
+            status_data = trip_service.get_boat_trip_status(boat["id"])
+            last_departure = None
+            if status_data and status_data.get("departure_details"):
+                dep_at = status_data["departure_details"]["departure_at"]
+                last_departure = dep_at.strftime("%b %d, %I:%M %p")
+            boat_details = BoatIdentifyResponse(
+                registration_no=boat["boat_number"],
+                vessel_name=boat.get("boat_name"),
+                owner_name=boat.get("owner_name", ""),
+                home_harbor=boat.get("harbor_name"),
+                boat_type=boat.get("boat_type"),
+                last_logged_departure=last_departure,
+                boat_id=boat["id"],
+            )
+
+    if not boat_number:
+        message = "No boat registration number detected in the image"
+    elif boat_details:
+        message = f"Boat {boat_number} identified and found in database"
+    else:
+        message = f"Boat number {boat_number} detected but not found in database"
+
+    return BoatScanResponse(
+        success=boat_number is not None,
+        boat_number=boat_number,
+        confidence=result.get("confidence"),
+        all_detected_text=result.get("all_detected_text", []),
+        boat=boat_details,
+        message=message,
     )
 
 
