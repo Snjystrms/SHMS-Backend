@@ -863,6 +863,35 @@ def delete_boat(boat_id: str) -> bool:
         conn.close()
 
 
+def get_boat_by_number(boat_number: str) -> Optional[Dict[str, Any]]:
+    """Get boat by boat_number (case-insensitive), including pending/unregistered boats."""
+    if not boat_number or not str(boat_number).strip():
+        return None
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id, boat_owner_id, boat_number, boat_name, boat_type, harbor_name,
+                   boat_document, boat_document_content_type, boat_document_filename,
+                   created_at, updated_at
+            FROM boats
+            WHERE LOWER(TRIM(boat_number)) = LOWER(TRIM(%s)) AND deleted_at IS NULL
+            LIMIT 1
+            """,
+            (boat_number.strip(),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return _boat_from_row(row)
+    except Exception:
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
 def create_pending_boat(boat_number: str, mobile_number: str) -> Optional[str]:
     """Create a pending (unregistered) boat. boat_owner_id=NULL, is_register=false."""
     boat_id = str(uuid.uuid4())

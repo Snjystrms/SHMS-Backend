@@ -730,6 +730,20 @@ async def register_pending_boat(
             detail="Mobile number is required",
         )
 
+    existing_boat = user_service.get_boat_by_number(boat_number)
+    if existing_boat:
+        sms = _get_sms()
+        sms.send_message(
+            mobile_number,
+            "Your boat registration is still pending. Please complete registration.",
+        )
+        return {
+            "success": True,
+            "boat_id": existing_boat["id"],
+            "boat_number": existing_boat["boat_number"],
+            "message": "Boat already exists. Reminder Registration SMS sent to owner.",
+        }
+
     boat_id = user_service.create_pending_boat(boat_number, mobile_number)
     if not boat_id:
         raise HTTPException(
@@ -741,7 +755,6 @@ async def register_pending_boat(
     message = "This boat is not registered. Please register."
     sms.send_message(mobile_number, message)
 
-    # Notify admin that this boat is not registered (high priority)
     notification_service.create_notification(
         notification_type="boat_not_registered",
         title="Boat not registered",
