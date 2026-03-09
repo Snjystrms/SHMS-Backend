@@ -247,12 +247,14 @@ async def delete_my_boat(boat_id: str, current_user: dict = Depends(deps.get_boa
 @router.get("/bidding-requests", response_model=BiddingRequestListResponse)
 async def list_bidding_requests(
     status_filter: Optional[str] = Query(None, alias="status"),
+    boat_id: Optional[str] = Query(None, alias="boat_id"),
     current_user: dict = Depends(deps.get_boat_owner_user),
 ):
-    """List all bidding requests for the authenticated boat owner's boats."""
+    """List bidding requests for the authenticated boat owner, optionally filtered by boat."""
     requests = bidding_service.list_bidding_requests_for_owner(
         boat_owner_id=current_user["id"],
         status_filter=status_filter,
+        boat_id=boat_id,
     )
     return BiddingRequestListResponse(
         success=True,

@@ -95,8 +95,9 @@ def create_bidding_request(
 def list_bidding_requests_for_owner(
     boat_owner_id: str,
     status_filter: Optional[str] = None,
+    boat_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """List bidding requests addressed to this boat owner."""
+    """List bidding requests addressed to this boat owner, optionally filtered by boat."""
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -111,6 +112,9 @@ def list_bidding_requests_for_owner(
             WHERE br.boat_owner_id = %s
         """
         params: list = [boat_owner_id]
+        if boat_id:
+            query += " AND br.boat_id = %s"
+            params.append(boat_id)
         if status_filter and status_filter in ("pending", "approved", "rejected"):
             query += " AND br.status = %s"
             params.append(status_filter)
