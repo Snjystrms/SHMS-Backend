@@ -292,6 +292,106 @@ def get_agent_dashboard_arrivals() -> Dict[str, Any]:
         conn.close()
 
 
+def get_boat_owner_dashboard(boat_owner_id: str) -> Dict[str, Any]:
+    """
+    Boat owner dashboard: total boats, in-sea count, and today's arrived boats
+    pending auction with per-boat pending bidding request counts.
+    """
+    ist = ZoneInfo("Asia/Kolkata")
+    now_ist = datetime.now(timezone.utc).astimezone(ist)
+    today_start_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 1. Total boats owned
+        cur.execute(
+            "SELECT COUNT(*) FROM boats WHERE boat_owner_id = %s AND deleted_at IS NULL",
+            (boat_owner_id,),
+        )
+        total_boats = cur.fetchone()[0] or 0
+
+        # 2. Boats currently in sea (latest movement is departure with no subsequent arrival)
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM boats b
+            WHERE b.boat_owner_id = %s AND b.deleted_at IS NULL
+              AND EXISTS (
+                SELECT 1 FROM boat_movements m
+                WHERE m.boat_id = b.id
+                  AND m.movement_type = 'departure'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM boat_movements m2
+                    WHERE m2.boat_id = b.id
+                      AND m2.movement_type IN ('arrival', 'partial_arrival')
+                      AND m2.movement_at > m.movement_at
+                  )
+              )
+            """,
+            (boat_owner_id,),
+        )
+        in_sea = cur.fetchone()[0] or 0
+
+        # 3. Arrived boats today with pending bidding request counts
+        cur.execute(
+            """
+            SELECT
+                b.id,
+                b.boat_number,
+                b.boat_name,
+                m.movement_at,
+                COALESCE(br_cnt.cnt, 0) AS pending_requests
+            FROM boat_movements m
+            JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
+            LEFT JOIN (
+                SELECT boat_id, COUNT(*) AS cnt
+                FROM bidding_requests
+                WHERE status = 'pending'
+                GROUP BY boat_id
+            ) br_cnt ON br_cnt.boat_id = b.id
+            WHERE b.boat_owner_id = %s
+              AND m.movement_type = 'arrival'
+              AND m.movement_at >= %s
+            ORDER BY m.movement_at DESC
+            """,
+            (boat_owner_id, today_start_ist),
+        )
+        rows = cur.fetchall()
+        pending_auctions = []
+        for r in rows:
+            arrival_dt = r[3]
+            if arrival_dt and arrival_dt.tzinfo is None:
+                arrival_dt = arrival_dt.replace(tzinfo=timezone.utc)
+            arrival_ist = arrival_dt.astimezone(ist) if arrival_dt else None
+            pending_auctions.append({
+                "boat_id": str(r[0]),
+                "boat_number": r[1] or "",
+                "boat_name": r[2] or "",
+                "status": "Arrived",
+                "arrival_time": arrival_ist.strftime("%I:%M %p") if arrival_ist else "",
+                "pending_bidding_requests_count": int(r[4]),
+            })
+
+        return {
+            "quick_activity": {
+                "total_boats": int(total_boats),
+                "in_sea": int(in_sea),
+            },
+            "pending_auctions": pending_auctions,
+            "updated_at": now_ist,
+        }
+    except Exception as e:
+        print(f"Error fetching boat owner dashboard: {e}")
+        return {
+            "quick_activity": {"total_boats": 0, "in_sea": 0},
+            "pending_auctions": [],
+            "updated_at": now_ist,
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+
 def get_open_departure_movement(boat_id: str) -> Optional[Dict[str, Any]]:
     """
     Return the open (unclosed) departure movement for this boat, if any.

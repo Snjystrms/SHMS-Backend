@@ -22,10 +22,29 @@ from app.schemas.bidding import (
 from app.api import deps
 from app.utils.otp_helpers import get_sms, send_otp_for_phone
 from app.utils.uploads import ALLOWED_BOAT_DOCUMENT_TYPES, save_boat_document
+from app.services import trip_service
 
 router = APIRouter()
 
 BOAT_OWNER_NOT_FOUND_DETAIL = "No boat owner found with this mobile number"
+
+
+@router.get("/dashboard")
+async def boat_owner_dashboard(
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """Boat owner dashboard: quick activity counts, pending auction boats."""
+    data = trip_service.get_boat_owner_dashboard(current_user["id"])
+    return {
+        "success": True,
+        "user": {
+            "id": current_user["id"],
+            "name": current_user["name"],
+        },
+        "quick_activity": data["quick_activity"],
+        "pending_auctions": data["pending_auctions"],
+        "updated_at": data["updated_at"],
+    }
 
 
 @router.get("/notifications")
