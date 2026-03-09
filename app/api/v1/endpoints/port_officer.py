@@ -1,4 +1,5 @@
 """Port officer endpoints: boat identification by registration number."""
+import uuid
 import urllib.request
 from typing import Optional
 
@@ -38,7 +39,7 @@ from app.schemas.dashboard import (
     TodayActivity,
 )
 from app.utils.sms import get_sms_provider
-from app.utils.uploads import save_crew_scan_image
+from app.utils.uploads import save_crew_scan_image, save_crew_crop
 
 
 def _fetch_image_bytes_from_url(image_url: str) -> Optional[bytes]:
@@ -478,6 +479,14 @@ async def arrival_crew_scan(
         )
     faces = raw_result.get("faces", [])
 
+    base = str(request.base_url).rstrip("/")
+    departure_crop_map = {c["id"]: c.get("crop_id") for c in departure_crew}
+
+    def _crop_image_url(crop_id: Optional[str]) -> Optional[str]:
+        if not crop_id:
+            return None
+        return f"{base}/uploads/crew-crops/{crop_id}.png"
+
     matched_ids = set()
     for f in faces:
         crew = f.get("crew_member")
@@ -490,6 +499,7 @@ async def arrival_crew_scan(
             name=c["name"],
             is_pilot=c.get("is_pilot", False),
             status="present",
+            crop_image_url=_crop_image_url(departure_crop_map.get(c["id"])),
         )
         for c in departure_crew
         if c["id"] in matched_ids
@@ -500,23 +510,39 @@ async def arrival_crew_scan(
             name=c["name"],
             is_pilot=c.get("is_pilot", False),
             status="missing",
+            crop_image_url=_crop_image_url(departure_crop_map.get(c["id"])),
         )
         for c in departure_crew
         if c["id"] not in matched_ids
     ]
-    unidentified_count = sum(
-        1 for f in faces
-        if not (f.get("is_match") and f.get("crew_member") and f["crew_member"].get("id") in departure_crew_ids)
-    )
-    unidentified_crew = [ArrivalUnidentifiedEntry() for _ in range(unidentified_count)]
 
-    # Generate annotated image with boxes for present/missing/unidentified
+    unidentified_faces = [
+        f for f in faces
+        if not (f.get("is_match") and f.get("crew_member") and f["crew_member"].get("id") in departure_crew_ids)
+    ]
+
+    unidentified_crew = []
+    for uf in unidentified_faces:
+        crop_url = None
+        bbox = uf.get("bbox")
+        if bbox and len(bbox) == 4:
+            crop_bytes = face_service.crop_face_from_image(image_bytes, bbox)
+            if crop_bytes:
+                crop_id = str(uuid.uuid4())
+                save_crew_crop(crop_id, crop_bytes)
+                crop_url = _crop_image_url(crop_id)
+
+        row_id = trip_service.save_unidentified_crew_member(
+            movement_id=movement_id,
+            crop_image_url=crop_url,
+        )
+        unidentified_crew.append(ArrivalUnidentifiedEntry(id=row_id, crop_image_url=crop_url))
+
     annotated_image_url = None
     annotated_bytes = face_service.draw_face_boxes_on_image(image_bytes, faces)
     if annotated_bytes:
         annotated_path = save_crew_scan_image(annotated_bytes)
         if annotated_path:
-            base = str(request.base_url).rstrip("/")
             annotated_image_url = f"{base}{annotated_path}"
 
     return ArrivalCrewCheckResponse(
@@ -526,7 +552,7 @@ async def arrival_crew_scan(
         crew_at_departure=len(departure_crew),
         crew_at_arrival=len(present_crew),
         missing_crew_count=len(missing_crew),
-        unidentified_count=unidentified_count,
+        unidentified_count=len(unidentified_crew),
         present_crew=present_crew,
         missing_crew=missing_crew,
         unidentified_crew=unidentified_crew,

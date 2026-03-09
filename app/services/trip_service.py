@@ -400,7 +400,7 @@ def get_departure_crew_with_details(movement_id: str) -> List[Dict[str, Any]]:
     try:
         cur.execute(
             """
-            SELECT cm.id, cm.name, cm.aadhaar_number, cm.phone, cm.is_pilot
+            SELECT cm.id, cm.name, cm.aadhaar_number, cm.phone, cm.is_pilot, bmc.crop_id
             FROM boat_movement_crew bmc
             JOIN crew_members cm ON cm.id = bmc.crew_member_id AND cm.deleted_at IS NULL
             WHERE bmc.movement_id = %s
@@ -416,6 +416,7 @@ def get_departure_crew_with_details(movement_id: str) -> List[Dict[str, Any]]:
                 "aadhaar_number": r[2],
                 "phone": r[3],
                 "is_pilot": bool(r[4]) if r[4] is not None else False,
+                "crop_id": r[5],
             }
             for r in rows
         ]
@@ -816,6 +817,29 @@ def get_scanned_crew_history(
             }
             for r in rows
         ]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def save_unidentified_crew_member(movement_id: str, crop_image_url: Optional[str] = None) -> str:
+    """Insert an unidentified crew member for an arrival scan. Returns the new row id."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        row_id = str(uuid.uuid4())
+        cur.execute(
+            """
+            INSERT INTO unidentified_crew_members (id, movement_id, crop_image_url)
+            VALUES (%s, %s, %s)
+            """,
+            (row_id, movement_id, crop_image_url),
+        )
+        conn.commit()
+        return row_id
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         cur.close()
         conn.close()

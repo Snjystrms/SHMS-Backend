@@ -139,12 +139,15 @@ class ArrivalCrewMemberStatus(BaseModel):
     crew_member_id: str
     name: str
     is_pilot: bool = False
-    status: Literal["present", "missing"]  # present = identified in arrival scan; missing = in departure, not in scan
+    status: Literal["present", "missing"]
+    crop_image_url: Optional[str] = None
 
 
 class ArrivalUnidentifiedEntry(BaseModel):
     """One unidentified person at arrival (not in departure crew; e.g. from another boat)."""
 
+    id: str
+    crop_image_url: Optional[str] = None
     note: str = "This individual does not match any registered crew from this trip's departure."
 
 
