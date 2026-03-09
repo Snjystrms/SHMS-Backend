@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     FACE_DUPLICATE_THRESHOLD: float = 0.30
     # InsightFace FaceAnalysis model configuration (pluggable via env)
     # Default uses ArcFace Buffalo_L pipeline as per FACE_RECOGNITION_SYSTEM_UPGRADE_2026.md
-    FACE_MODEL_NAME: str = "buffalo_l"
+    FACE_MODEL_NAME: str = "buffalo_s"
     # GPU id for InsightFace (0 = first GPU, -1 = CPU)
     FACE_CTX_ID: int = 0
 

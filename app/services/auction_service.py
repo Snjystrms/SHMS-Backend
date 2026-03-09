@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from fastapi.encoders import jsonable_encoder
 from fastapi.websockets import WebSocketState
 
 from app.db.session import get_db_connection
@@ -436,17 +437,51 @@ def create_bid(auction_id: str, bidder_id: str, amount: float) -> Tuple[Optional
 
 
 async def broadcast_bid(auction_id: str, bid: Dict[str, Any]) -> None:
-    """Send a bid update to all clients connected to this auction's WebSocket."""
+    """
+    Send a bid update to all clients connected to this auction's WebSocket.
+
+    Message format (JSON):
+    {
+        "type": "new_bid",
+        "auction_id": "<auction UUID>",
+        "amount": <float>,
+        "bidder_id": "<user UUID>",
+        "created_at": "<ISO-8601 UTC timestamp>",
+        "current_price": <float>,
+        "status": "<scheduled|active|completed|cancelled>"
+    }
+    """
+    # Send full state on each bid so all clients can render complete bid history.
+    auction = get_auction_by_id(auction_id)
+    bids = list_bids_for_auction(auction_id)
+    full_update = {
+        "type": "update",
+        "auction": auction,
+        "bids": bids,
+        "latest_bid": bid,
+    }
+    new_bid_message = {
+        "type": "new_bid",
+        "auction_id": auction_id,
+        "amount": bid["amount"],
+        "bidder_id": bid["bidder_id"],
+        "created_at": bid.get("created_at"),
+        "current_price": bid["amount"],
+        "status": "active",
+    }
+
     connections = list(active_auction_connections.get(auction_id, []))
     for ws in connections:
-        if ws.client_state == WebSocketState.CONNECTED:
-            await ws.send_json(
-                {
-                    "type": "new_bid",
-                    "auction_id": auction_id,
-                    "amount": bid["amount"],
-                    "bidder_id": bid["bidder_id"],
-                    "created_at": bid["created_at"].isoformat(),
-                }
-            )
-
+        if ws.client_state != WebSocketState.CONNECTED:
+            continue
+        try:
+            await ws.send_json(jsonable_encoder(full_update))
+            # Keep backward compatibility for clients listening only to "new_bid".
+            await ws.send_json(jsonable_encoder(new_bid_message))
+        except Exception as e:
+            print(f"Error broadcasting bid to websocket client: {e}")
+            current_connections = active_auction_connections.get(auction_id, [])
+            if ws in current_connections:
+                current_connections.remove(ws)
+            if not current_connections:
+                active_auction_connections.pop(auction_id, None)

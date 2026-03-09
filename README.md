@@ -26,7 +26,7 @@ alembic upgrade head
 
 # 6. Start server (use run script so Expo/frontend can reach API at http://<your-ip>:8000)
 chmod +x run.sh && ./run.sh
-# Or: uvicorn app.main:app --reload --host 0.0.0.0
+# Or: uvicorn app.main:app --reload --host 0.0.0.0 --host 0.0.0.0
 ```
 
 **API docs:** http://127.0.0.1:8000/docs (or http://\<your-lan-ip\>:8000/docs)
@@ -129,7 +129,7 @@ You should **separate real secrets from examples**.
 ## ▶️ Run the Server
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --host 0.0.0.0
 ```
 
 Open Swagger UI:

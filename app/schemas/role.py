@@ -7,6 +7,8 @@ class RoleType(str, Enum):
     ADMIN = "admin"
     BOAT_OWNER = "boat_owner"
     OFFICER = "officer"
+    AGENT = "agent"
+    BUYER = "buyer"
     BUYER = "buyer"
 
 class RoleBase(BaseModel):

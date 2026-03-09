@@ -19,6 +19,31 @@ class BoatOwnerCreate(BaseModel):
     phone: str
 
 
+class AgentRegisterRequest(BaseModel):
+    """Registration for agents: name and mobile number (OTP-based login)."""
+    name: str
+    phone: str
+    aadhaar_number: Optional[str] = None
+
+
+class AgentVerifyOtpRequest(BaseModel):
+    """Request body for agent OTP verification (login / complete registration)."""
+    mobile_number: str
+    otp: str
+
+
+class BuyerRegisterRequest(BaseModel):
+    """Registration for buyers: name and mobile number (OTP-based login)."""
+    name: str
+    phone: str
+
+
+class BuyerVerifyOtpRequest(BaseModel):
+    """Request body for buyer OTP verification (login / complete registration)."""
+    mobile_number: str
+    otp: str
+
+
 class UserUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None

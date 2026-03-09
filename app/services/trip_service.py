@@ -2,6 +2,7 @@
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, Tuple, List
+from zoneinfo import ZoneInfo
 from app.db.session import get_db_connection
 
 
@@ -220,6 +221,71 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
             "crew_registration": crew_registration,
             "crew_verification": crew_verification,
             "updated_at": now,
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_agent_dashboard_arrivals() -> Dict[str, Any]:
+    """
+    Agent dashboard: today's arrived boats count + all arrived boats (today, IST).
+    "Arrived" is derived from boat_movements.movement_type = 'arrival'.
+    """
+    ist = ZoneInfo("Asia/Kolkata")
+    now_ist = datetime.now(timezone.utc).astimezone(ist)
+    today_start_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM boat_movements m
+            JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
+            WHERE m.movement_type = 'arrival'
+              AND m.movement_at >= %s
+            """,
+            (today_start_ist,),
+        )
+        arrived_count = cur.fetchone()[0] or 0
+
+        cur.execute(
+            """
+            SELECT
+                b.id,
+                b.boat_number,
+                b.boat_name,
+                m.movement_at
+            FROM boat_movements m
+            JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
+            WHERE m.movement_type = 'arrival'
+              AND m.movement_at >= %s
+            ORDER BY m.movement_at DESC
+            """,
+            (today_start_ist,),
+        )
+        rows = cur.fetchall()
+        boats = [
+            {
+                "boat_id": str(r[0]),
+                "boat_number": r[1] or "",
+                "boat_name": r[2] or "",
+                "boat_status": "Arrived",
+                "time": (
+                    (r[3].replace(tzinfo=timezone.utc) if r[3].tzinfo is None else r[3]).astimezone(ist).strftime("%I:%M %p")
+                    if r[3]
+                    else None
+                ),
+            }
+            for r in rows
+        ]
+
+        return {
+            "arrived_boats_count": int(arrived_count),
+            "arrived_boats": boats,
+            "updated_at": now_ist,
         }
     finally:
         cur.close()

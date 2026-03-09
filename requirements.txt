@@ -1,12 +1,13 @@
 fastapi
 uvicorn
 insightface
-opencv-python
+opencv-python-headless
 numpy==1.26.4
 psycopg2-binary
 python-multipart
-onnxruntime>=1.23.2
+onnxruntime>=1.19.0
 Pillow
+onnxruntime==1.23.2
 python-dotenv
 SQLAlchemy
 alembic
@@ -15,9 +16,11 @@ passlib[bcrypt]==1.7.4
 email-validator==2.2.0
 pydantic-settings
 dotenv
-alembic
-# YOLO (Ultralytics) for human detection stage
-ultralytics
+# Use CPU-only PyTorch wheels on Railway Linux to prevent CUDA package downloads.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu; platform_system == "Linux" and platform_machine == "x86_64"
+torchvision==0.20.1+cpu; platform_system == "Linux" and platform_machine == "x86_64"
+ultralytics==8.4.20
 
 # Optional: for SMS_PROVIDER=twilio
 twilio

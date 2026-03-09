@@ -1,11 +1,24 @@
 """Boat owner registration, OTP login, and boat CRUD (own boats only)."""
 from datetime import timedelta
-from fastapi import APIRouter, Depends, File, Form, HTTPException, status, UploadFile
+from typing import Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, status, UploadFile
 from app.core import security
 from app.core.config import settings
 from app.services import user_service as crud_user, notification_service
+from app.services import bidding_service
+from app.services.otp_registration_service import (
+    start_temp_user_registration,
+    verify_otp_and_login_with_role,
+)
 from app.schemas.token import Token
 from app.schemas.user import BoatOwnerCreate, BoatCreate, BoatUpdate, ForgotPasswordRequest, BoatOwnerVerifyOtpRequest
+from app.schemas.bidding import (
+    BiddingRequestAction,
+    BiddingRequestItem,
+    BiddingRequestListResponse,
+    BiddingRequestResponse,
+)
 from app.api import deps
 from app.utils.otp_helpers import get_sms, send_otp_for_phone
 from app.utils.uploads import ALLOWED_BOAT_DOCUMENT_TYPES, save_boat_document
@@ -59,41 +72,22 @@ async def register_boat_owner(user_data: BoatOwnerCreate):
     """
     phone = user_data.phone.strip()
     name = user_data.name.strip()
+
+    # Preserve existing name uniqueness check for boat owners
     existing_by_name = crud_user.get_boat_owner_by_name(name)
     if existing_by_name:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="A boat owner with this name already exists",
         )
-    # existing_boat_owner = crud_user.get_boat_owner_by_phone(phone)
-    # if existing_boat_owner:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_400_BAD_REQUEST,
-    #         detail="A boat owner with this mobile number already exists",
-    #     )
-    if not crud_user.create_temp_user(name, phone):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to save registration",
-        )
-    otp, ok = crud_user.create_and_store_otp(phone, settings.SMS_OTP_EXPIRE_MINUTES)
-    if not ok or not otp:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate OTP",
-        )
-    sms = get_sms()
-    if not sms.send_otp(phone, otp):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to send OTP",
-        )
-    return {
-        "success": True,
-        "message": "OTP sent to your mobile. Verify to complete registration.",
-        "masked_mobile": crud_user.mask_mobile(phone),
-        "expires_in_minutes": settings.SMS_OTP_EXPIRE_MINUTES,
-    }
+
+    return start_temp_user_registration(
+        name=name,
+        phone=phone,
+        duplicate_check=crud_user.get_boat_owner_by_phone,
+        duplicate_error_detail="A boat owner with this mobile number already exists",
+        success_message="OTP sent to your mobile. Verify to complete registration.",
+    )
 
 
 @router.post("/login/send-otp")
@@ -110,37 +104,12 @@ async def boat_owner_send_otp(req: ForgotPasswordRequest):
 async def boat_owner_verify_otp(req: BoatOwnerVerifyOtpRequest):
     """Verify OTP: if temp_user exists, create user then return token; else login existing boat owner."""
     phone = req.mobile_number.strip()
-    if not crud_user.verify_otp(phone, req.otp):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP")
-    temp = crud_user.get_temp_user_by_phone(phone)
-    if temp:
-        role_id = crud_user.get_role_id_by_name("boat_owner")
-        if not role_id:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Boat owner role not found",
-            )
-        new_user_dict = {"name": temp["name"], "phone": phone}
-        user_id = crud_user.create_user(new_user_dict, role_id)
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to complete registration",
-            )
-        crud_user.delete_temp_user_by_phone(phone)
-        user = crud_user.get_user_by_id(user_id)
-        if not user:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User data not found")
-        return _token_response(user)
-    owner = crud_user.get_boat_owner_by_phone(phone)
-    if not owner:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=BOAT_OWNER_NOT_FOUND_DETAIL,
-        )
-    user = crud_user.get_user_by_id(owner["id"])
-    if not user:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User data not found")
+    user = verify_otp_and_login_with_role(
+        phone=phone,
+        otp=req.otp,
+        role_name="boat_owner",
+        get_user_by_phone=crud_user.get_boat_owner_by_phone,
+    )
     return _token_response(user)
 
 
@@ -253,3 +222,69 @@ async def delete_my_boat(boat_id: str, current_user: dict = Depends(deps.get_boa
     if not ok:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete boat")
     return {"success": True, "message": "Boat deleted"}
+
+
+# ----- Bidding Requests (boat owner side) -----
+@router.get("/bidding-requests", response_model=BiddingRequestListResponse)
+async def list_bidding_requests(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """List all bidding requests for the authenticated boat owner's boats."""
+    requests = bidding_service.list_bidding_requests_for_owner(
+        boat_owner_id=current_user["id"],
+        status_filter=status_filter,
+    )
+    return BiddingRequestListResponse(
+        success=True,
+        total=len(requests),
+        bidding_requests=[BiddingRequestItem(**r) for r in requests],
+    )
+
+
+@router.put("/bidding-requests/{request_id}", response_model=BiddingRequestResponse)
+async def respond_to_bidding_request(
+    request_id: str,
+    body: BiddingRequestAction,
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """
+    Boat owner approves or rejects a bidding request.
+    Pass {"status": "approved"} or {"status": "rejected"}.
+    """
+    result, err = bidding_service.respond_to_bidding_request(
+        request_id=request_id,
+        boat_owner_id=current_user["id"],
+        new_status=body.status,
+    )
+    if err:
+        if "not found" in err.lower():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err)
+        if "already" in err.lower():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=err)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
+
+    boat_label = result.get("boat_number") or result.get("boat_name") or ""
+    agent_name = result.get("agent_name") or "Agent"
+    action_label = "approved" if body.status == "approved" else "rejected"
+
+    notification_service.create_notification(
+        notification_type="bidding_request_response",
+        title=f"Bidding request {action_label} for {boat_label}",
+        message=f"Boat owner has {action_label} {agent_name}'s bidding request for {boat_label}.",
+        metadata={
+            "bidding_request_id": request_id,
+            "boat_id": result.get("boat_id"),
+            "boat_number": result.get("boat_number"),
+            "agent_id": result.get("agent_id"),
+            "status": body.status,
+        },
+        recipient_role="agent",
+        priority="medium",
+    )
+
+    return BiddingRequestResponse(
+        success=True,
+        message=f"Bidding request {action_label}",
+        bidding_request=BiddingRequestItem(**result),
+    )

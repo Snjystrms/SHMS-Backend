@@ -1,4 +1,5 @@
 import io
+import logging
 import uuid
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
@@ -6,11 +7,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 from insightface.app import FaceAnalysis
-from PIL import Image, ImageDraw
-from ultralytics import YOLO
+from PIL import Image, ImageDraw, ImageOps
 
 from app.core.config import settings
 from app.db.session import get_db_connection
+
+# Set to False after verifying mobile orientation/crop fixes.
+FACE_DEBUG_LOGS = True
+logger = logging.getLogger(__name__)
 
 
 @lru_cache
@@ -30,7 +34,7 @@ def _get_face_app() -> FaceAnalysis:
 
 
 @lru_cache
-def _get_yolo_model() -> Optional[YOLO]:
+def _get_yolo_model() -> Optional[Any]:
     """
     Initialize and cache YOLO model for human detection.
 
@@ -39,19 +43,101 @@ def _get_yolo_model() -> Optional[YOLO]:
     """
     if not settings.YOLO_ENABLED:
         return None
+
+    # Lazy import so Ultralytics / PyTorch are only loaded when YOLO
+    # is actually enabled and used (saves baseline RAM on small hosts).
+    from ultralytics import YOLO
+
     model = YOLO(settings.YOLO_MODEL_NAME)
     return model
 
 
-def _decode_image(image_bytes: bytes) -> Optional[np.ndarray]:
+def _load_normalized_image(image_bytes: bytes) -> Optional[Tuple[Image.Image, int]]:
+    """
+    Load image with EXIF orientation applied. Returns (PIL Image in RGB, exif_orientation).
+    This ensures all downstream ops use the same display-oriented pixel matrix.
+    """
+    if not image_bytes:
+        return None
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        exif_orientation = 1
+        try:
+            exif = img.getexif() if hasattr(img, "getexif") else None
+            exif_orientation = exif.get(274, 1) if exif else 1
+        except Exception:
+            pass
+        img = ImageOps.exif_transpose(img)
+        img = img.convert("RGB")
+        return img, exif_orientation
+    except Exception:
+        return None
+
+
+def _pil_to_cv2_bgr(pil_img: Image.Image) -> np.ndarray:
+    """Convert PIL RGB to OpenCV BGR for InsightFace/YOLO."""
+    arr = np.array(pil_img)
+    return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+
+
+def _scale_bbox_to_original(
+    bbox: List[float],
+    det_w: int,
+    det_h: int,
+    orig_w: int,
+    orig_h: int,
+) -> List[float]:
+    """Scale bbox from detection (possibly scaled) space to original normalized image space."""
+    if det_w <= 0 or det_h <= 0:
+        return bbox
+    sx = orig_w / det_w
+    sy = orig_h / det_h
+    return [
+        bbox[0] * sx,
+        bbox[1] * sy,
+        bbox[2] * sx,
+        bbox[3] * sy,
+    ]
+
+
+def _decode_image(
+    image_bytes: bytes,
+) -> Optional[Tuple[np.ndarray, int, int, int, int]]:
+    """
+    Load image with EXIF normalization, convert to BGR for detection, optionally scale.
+    Returns (scaled_numpy_bgr, det_w, det_h, orig_w, orig_h) for bbox coordinate mapping.
+    """
     if not image_bytes:
         return None
 
-    img_array = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-    if img is None:
+    norm = _load_normalized_image(image_bytes)
+    if norm is None:
         return None
-    return img
+    pil_img, exif_orientation = norm
+    orig_w, orig_h = pil_img.size
+    img = _pil_to_cv2_bgr(pil_img)
+    h, w = img.shape[:2]
+
+    if FACE_DEBUG_LOGS:
+        logger.info(
+            "[face] input image size=(%d,%d) mode=RGB exif_orientation=%s",
+            orig_w,
+            orig_h,
+            exif_orientation,
+        )
+
+    target_max_side = 640
+    max_side = max(h, w)
+    if max_side > target_max_side:
+        scale = float(target_max_side) / float(max_side)
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        det_w, det_h = new_w, new_h
+    else:
+        det_w, det_h = w, h
+
+    return img, det_w, det_h, orig_w, orig_h
 
 
 def _iou_xyxy(
@@ -147,21 +233,29 @@ def draw_face_boxes_on_image(
 ) -> Optional[bytes]:
     """
     Draw bounding boxes on the image using PIL. Green = match, red = no match.
-    Each face dict must have 'bbox' ([x1, y1, x2, y2]) and 'is_match' (bool).
-    Returns PNG image bytes, or None if the image cannot be opened.
+    Each face dict must have 'bbox' ([x1, y1, x2, y2]) in normalized image coords.
+    Uses EXIF-normalized image so output displays correctly on mobile.
+    Returns PNG image bytes (no EXIF, display orientation baked in).
     """
     if not image_bytes or not faces:
         return None
-    try:
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    except Exception:
+    norm = _load_normalized_image(image_bytes)
+    if norm is None:
         return None
+    img, _ = norm
+    w, h = img.size
+
     draw = ImageDraw.Draw(img)
     for f in faces:
         bbox = f.get("bbox")
         if not bbox or len(bbox) != 4:
             continue
         x1, y1, x2, y2 = [int(round(x)) for x in bbox]
+        # Clamp to image bounds
+        x1 = max(0, min(x1, w - 1))
+        y1 = max(0, min(y1, h - 1))
+        x2 = max(x1 + 1, min(x2, w))
+        y2 = max(y1 + 1, min(y2, h))
         is_match = bool(f.get("is_match"))
         color = (0, 255, 0) if is_match else (255, 0, 0)  # green / red
         draw.rectangle(
@@ -171,30 +265,50 @@ def draw_face_boxes_on_image(
         )
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    return buf.getvalue()
+    out_bytes = buf.getvalue()
+    if FACE_DEBUG_LOGS:
+        logger.info("[face] draw_face_boxes output size=(%d,%d)", w, h)
+    return out_bytes
 
 
 def crop_face_from_image(image_bytes: bytes, bbox: List[float]) -> Optional[bytes]:
     """
     Crop the face/person region from the image using bbox [x1, y1, x2, y2].
-    Returns PNG image bytes, or None if the image cannot be opened or bbox is invalid.
+    Bbox must be in normalized (EXIF-applied) image coordinates.
+    Returns PNG image bytes (no EXIF) for correct mobile display.
     """
     if not image_bytes or not bbox or len(bbox) != 4:
         return None
-    try:
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    except Exception:
+    norm = _load_normalized_image(image_bytes)
+    if norm is None:
         return None
+    img, _ = norm
     w, h = img.size
     x1, y1, x2, y2 = [int(round(x)) for x in bbox]
+    # Clamp to image bounds: left>=0, top>=0, right<=width, bottom<=height
     x1 = max(0, min(x1, w - 1))
     y1 = max(0, min(y1, h - 1))
     x2 = max(x1 + 1, min(x2, w))
     y2 = max(y1 + 1, min(y2, h))
+    if x2 <= x1 or y2 <= y1:
+        return None
     crop = img.crop((x1, y1, x2, y2))
     buf = io.BytesIO()
     crop.save(buf, format="PNG")
-    return buf.getvalue()
+    out_bytes = buf.getvalue()
+    if FACE_DEBUG_LOGS:
+        logger.info(
+            "[face] crop_face final_rect=(%d,%d,%d,%d) img_size=(%d,%d) crop_size=(%d,%d)",
+            x1,
+            y1,
+            x2,
+            y2,
+            w,
+            h,
+            x2 - x1,
+            y2 - y1,
+        )
+    return out_bytes
 
 
 def detect_face_and_crop(image_bytes: bytes) -> Tuple[bool, Optional[bytes]]:
@@ -205,22 +319,31 @@ def detect_face_and_crop(image_bytes: bytes) -> Tuple[bool, Optional[bytes]]:
         (face_detected, crop_bytes): face_detected is True if a face was found,
         crop_bytes is PNG bytes of the cropped face (or None if no face).
     """
-    img = _decode_image(image_bytes)
-    if img is None:
+    decoded = _decode_image(image_bytes)
+    if decoded is None:
         return False, None
+    img, det_w, det_h, orig_w, orig_h = decoded
 
     face_app = _get_face_app()
     faces = face_app.get(img)
     if not faces:
         return False, None
 
-    # Use the first (highest-confidence) face
     face = faces[0]
     bbox = getattr(face, "bbox", None)
     if bbox is None or len(bbox) != 4:
         return False, None
 
-    crop_bytes = crop_face_from_image(image_bytes, [float(x) for x in bbox])
+    bbox_orig = _scale_bbox_to_original(
+        [float(x) for x in bbox], det_w, det_h, orig_w, orig_h
+    )
+    if FACE_DEBUG_LOGS:
+        logger.info(
+            "[face] detect_face_and_crop bbox_det=%s bbox_orig=%s",
+            bbox,
+            bbox_orig,
+        )
+    crop_bytes = crop_face_from_image(image_bytes, bbox_orig)
     if not crop_bytes:
         return False, None
 
@@ -232,12 +355,12 @@ def get_embedding(image_bytes: bytes) -> Optional[np.ndarray]:
     Backwards‑compatible helper for single‑face flows (registration).
     Uses the first detected face embedding.
     """
-    img = _decode_image(image_bytes)
-    if img is None:
+    decoded = _decode_image(image_bytes)
+    if decoded is None:
         return None
+    img, _, _, _, _ = decoded
 
     face_app = _get_face_app()
-
     faces = face_app.get(img)
     if not faces:
         return None
@@ -252,20 +375,29 @@ def identify_faces_in_image(
     Detect and identify multiple faces in a group photo.
 
     Returns a dict with a `faces` list. Each face entry contains:
-      - bbox: [x1, y1, x2, y2]
+      - bbox: [x1, y1, x2, y2] in normalized (original) image coordinates
       - det_score: detector confidence
       - distance: pgvector distance to closest stored embedding (or None)
       - is_match: bool using settings.FACE_MATCH_THRESHOLD
       - crew_member: dict with crew details if matched, else None
     """
-    img = _decode_image(image_bytes)
-    if img is None:
+    decoded = _decode_image(image_bytes)
+    if decoded is None:
         return None
+    img, det_w, det_h, orig_w, orig_h = decoded
 
     face_app = _get_face_app()
     yolo_model = _get_yolo_model()
 
     results: List[Dict[str, Any]] = []
+
+    def _scale_and_append(bbox_det: List[float], **kwargs: Any) -> None:
+        bbox_orig = _scale_bbox_to_original(
+            bbox_det, det_w, det_h, orig_w, orig_h
+        )
+        if FACE_DEBUG_LOGS and results:
+            pass  # Log once per batch below
+        results.append({"bbox": bbox_orig, **kwargs})
 
     if yolo_model is not None:
         # ---- Stage 1: YOLO human detection ----
@@ -293,14 +425,21 @@ def identify_faces_in_image(
         if not person_boxes:
             return {"faces": []}
 
-        # NMS on person boxes: YOLO26 is NMS-free and can return overlapping
-        # detections for the same person, causing duplicate face counts.
         nms_keep = _nms_boxes_xyxy(person_boxes, person_scores, iou_threshold=0.5)
         person_boxes = [person_boxes[i] for i in nms_keep]
 
+        if FACE_DEBUG_LOGS:
+            logger.info(
+                "[face] identify_faces det_size=(%d,%d) orig_size=(%d,%d) person_boxes=%d",
+                det_w,
+                det_h,
+                orig_w,
+                orig_h,
+                len(person_boxes),
+            )
+
         # ---- Stage 2: Face detection inside each person box ----
         for (px1, py1, px2, py2) in person_boxes:
-            # Clamp to image bounds
             h, w = img.shape[:2]
             px1c = max(0, min(px1, w - 1))
             py1c = max(0, min(py1, h - 1))
@@ -322,38 +461,42 @@ def identify_faces_in_image(
                     crew_member = get_crew_member_by_id(str(crew_id))
                     is_match = crew_member is not None
 
-                # Face bbox is relative to the crop; convert to full-image coords
                 local_bbox = getattr(face, "bbox", None)
                 if local_bbox is not None:
                     fx1, fy1, fx2, fy2 = local_bbox
-                    bbox = [
+                    bbox_det = [
                         float(px1c + fx1),
                         float(py1c + fy1),
                         float(px1c + fx2),
                         float(py1c + fy2),
                     ]
                 else:
-                    bbox = [float(px1c), float(py1c), float(px2c), float(py2c)]
+                    bbox_det = [float(px1c), float(py1c), float(px2c), float(py2c)]
 
                 det_score = float(getattr(face, "det_score", 0.0))
-
-                results.append(
-                    {
-                        "bbox": bbox,
-                        "det_score": det_score,
-                        "distance": float(distance) if distance is not None else None,
-                        "is_match": is_match,
-                        "crew_member": crew_member,
-                        "embedding": embedding.tolist(),
-                    }
+                _scale_and_append(
+                    bbox_det,
+                    det_score=det_score,
+                    distance=float(distance) if distance is not None else None,
+                    is_match=is_match,
+                    crew_member=crew_member,
+                    embedding=embedding.tolist(),
                 )
-        # Deduplicate faces (same person in overlapping crops or double detections)
         results = _deduplicate_faces_by_iou(results, iou_threshold=0.4)
     else:
         # Fallback: direct face detection on the full frame (no YOLO)
         faces = face_app.get(img)
         if not faces:
             return {"faces": []}
+
+        if FACE_DEBUG_LOGS:
+            logger.info(
+                "[face] identify_faces (no YOLO) det_size=(%d,%d) orig_size=(%d,%d)",
+                det_w,
+                det_h,
+                orig_w,
+                orig_h,
+            )
 
         for face in faces:
             embedding = face.embedding
@@ -365,19 +508,32 @@ def identify_faces_in_image(
                 crew_member = get_crew_member_by_id(str(crew_id))
                 is_match = crew_member is not None
 
-            bbox = [float(x) for x in getattr(face, "bbox", [])] if getattr(face, "bbox", None) is not None else None
-            det_score = float(getattr(face, "det_score", 0.0))
-
-            results.append(
-                {
-                    "bbox": bbox,
-                    "det_score": det_score,
-                    "distance": float(distance) if distance is not None else None,
-                    "is_match": is_match,
-                    "crew_member": crew_member,
-                    "embedding": embedding.tolist(),
-                }
+            bbox_det = (
+                [float(x) for x in getattr(face, "bbox", [])]
+                if getattr(face, "bbox", None) is not None
+                else None
             )
+            det_score = float(getattr(face, "det_score", 0.0))
+            if bbox_det and len(bbox_det) == 4:
+                _scale_and_append(
+                    bbox_det,
+                    det_score=det_score,
+                    distance=float(distance) if distance is not None else None,
+                    is_match=is_match,
+                    crew_member=crew_member,
+                    embedding=embedding.tolist(),
+                )
+            else:
+                results.append(
+                    {
+                        "bbox": None,
+                        "det_score": det_score,
+                        "distance": float(distance) if distance is not None else None,
+                        "is_match": is_match,
+                        "crew_member": crew_member,
+                        "embedding": embedding.tolist(),
+                    }
+                )
         results = _deduplicate_faces_by_iou(results, iou_threshold=0.4)
 
     matched_count = sum(1 for r in results if r["is_match"])
