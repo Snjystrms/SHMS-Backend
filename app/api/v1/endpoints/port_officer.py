@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request
 from app.api import deps
 from app.core.config import settings
-from app.services import user_service, trip_service, face_service, notification_service
+from app.services import user_service, trip_service, face_service, notification_service, boat_scan_service
 from app.schemas.user import BoatIdentifyResponse, PendingBoatRegisterRequest, BoatScanResponse
 from app.schemas.crew import (
     CrewScannedHistoryResponse,
@@ -123,11 +123,15 @@ async def identify_boat(
         )
 
     boat = user_service.get_boat_by_number_with_owner(boat_number)
+    is_pending = False
     if not boat:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Boat not found",
-        )
+        boat = user_service.get_boat_by_number(boat_number)
+        if not boat:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Boat not found",
+            )
+        is_pending = True
 
     status_data = trip_service.get_boat_trip_status(boat["id"])
     last_departure = None
@@ -143,7 +147,9 @@ async def identify_boat(
         boat_type=boat.get("boat_type"),
         last_logged_departure=last_departure,
         boat_id=boat["id"],
+        is_pending_registration=is_pending,
     )
+    
 @router.post("/boats/scan-number", response_model=BoatScanResponse)
 async def scan_boat_number(
     file: UploadFile = File(...),
@@ -170,8 +176,13 @@ async def scan_boat_number(
     boat_number = result.get("boat_number")
 
     boat_details = None
+    is_pending = False
     if boat_number:
         boat = user_service.get_boat_by_number_with_owner(boat_number)
+        if not boat:
+            boat = user_service.get_boat_by_number(boat_number)
+            if boat:
+                is_pending = True
         if boat:
             status_data = trip_service.get_boat_trip_status(boat["id"])
             last_departure = None
@@ -186,12 +197,17 @@ async def scan_boat_number(
                 boat_type=boat.get("boat_type"),
                 last_logged_departure=last_departure,
                 boat_id=boat["id"],
+                is_pending_registration=is_pending,
             )
 
     if not boat_number:
         message = "No boat registration number detected in the image"
     elif boat_details:
-        message = f"Boat {boat_number} identified and found in database"
+        message = (
+            f"Boat {boat_number} identified and found in database (pending registration)"
+            if is_pending
+            else f"Boat {boat_number} identified and found in database"
+        )
     else:
         message = f"Boat number {boat_number} detected but not found in database"
 

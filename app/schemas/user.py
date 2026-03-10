@@ -126,6 +126,7 @@ class BoatIdentifyResponse(BaseModel):
     boat_type: Optional[str] = None
     last_logged_departure: Optional[str] = None  # e.g. "3 days ago" when departure tracking exists
     boat_id: str
+    is_pending_registration: bool = False  # True when boat exists but owner not linked
 
 
 class BoatScanResponse(BaseModel):
