@@ -1,13 +1,12 @@
 """Port officer endpoints: boat identification by registration number."""
-import uuid
 import urllib.request
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request
 from app.api import deps
 from app.core.config import settings
-from app.services import user_service, trip_service, face_service, notification_service, boat_scan_service
-from app.schemas.user import BoatIdentifyResponse, BoatScanResponse, PendingBoatRegisterRequest
+from app.services import user_service, trip_service, face_service, notification_service
+from app.schemas.user import BoatIdentifyResponse, PendingBoatRegisterRequest, BoatScanResponse
 from app.schemas.crew import (
     CrewScannedHistoryResponse,
     CrewScannedHistoryItem,
@@ -39,7 +38,8 @@ from app.schemas.dashboard import (
     TodayActivity,
 )
 from app.utils.sms import get_sms_provider
-from app.utils.uploads import save_crew_scan_image, save_crew_crop
+from app.utils.uploads import save_crew_scan_image
+from app.utils.url_helpers import resolve_image_url
 
 
 def _fetch_image_bytes_from_url(image_url: str) -> Optional[bytes]:
@@ -144,8 +144,6 @@ async def identify_boat(
         last_logged_departure=last_departure,
         boat_id=boat["id"],
     )
-
-
 @router.post("/boats/scan-number", response_model=BoatScanResponse)
 async def scan_boat_number(
     file: UploadFile = File(...),
@@ -210,6 +208,7 @@ async def scan_boat_number(
 @router.get("/boats/{boat_id}/trip-status", response_model=BoatTripStatusResponse)
 async def get_boat_trip_status(
     boat_id: str,
+    request: Request,
     current_user: dict = Depends(deps.get_admin_or_officer_user),
 ):
     """
@@ -222,6 +221,11 @@ async def get_boat_trip_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Boat not found",
         )
+    request_base = str(request.base_url)
+    if status_data.get("departure_details") and status_data["departure_details"].get("image_url") and not status_data["departure_details"]["image_url"].startswith("http"):
+        status_data["departure_details"]["image_url"] = resolve_image_url(status_data["departure_details"]["image_url"], request_base)
+    if status_data.get("last_movement_image_url") and not status_data["last_movement_image_url"].startswith("http"):
+        status_data["last_movement_image_url"] = resolve_image_url(status_data["last_movement_image_url"], request_base)
     return BoatTripStatusResponse(**status_data)
 
 
@@ -230,6 +234,7 @@ async def get_boat_trip_status(
     response_model=BoatMovementHistoryResponse,
 )
 async def get_movement_history(
+    request: Request,
     movement_type: str,
     date_filter: HistoryDateFilter = "today",
     current_user: dict = Depends(deps.get_admin_or_officer_user),
@@ -243,6 +248,10 @@ async def get_movement_history(
         movement_type=movement_type,
         date_filter=date_filter,
     )
+    request_base = str(request.base_url)
+    for r in records_raw:
+        if r.get("image_url") and not r["image_url"].startswith("http"):
+            r["image_url"] = resolve_image_url(r["image_url"], request_base)
     records = [BoatMovementHistoryItem(**r) for r in records_raw]
     return BoatMovementHistoryResponse(
         movement_type=movement_type,
@@ -257,6 +266,7 @@ async def get_movement_history(
     response_model=CrewScannedHistoryResponse,
 )
 async def get_crew_scanned_history(
+    request: Request,
     date_filter: CrewHistoryDateFilter = "today",
     is_register: Optional[bool] = None,
     current_user: dict = Depends(deps.get_admin_or_officer_user),
@@ -272,6 +282,11 @@ async def get_crew_scanned_history(
         date_filter=date_filter,
         is_register=is_register,
     )
+    # Resolve relative image_url to absolute URL for Android/client compatibility
+    request_base = str(request.base_url)
+    for r in records_raw:
+        if r.get("image_url") and not r["image_url"].startswith("http"):
+            r["image_url"] = resolve_image_url(r["image_url"], request_base)
     records = [CrewScannedHistoryItem(**r) for r in records_raw]
     return CrewScannedHistoryResponse(
         date_filter=date_filter,
@@ -540,14 +555,6 @@ async def arrival_crew_scan(
         )
     faces = raw_result.get("faces", [])
 
-    base = str(request.base_url).rstrip("/")
-    departure_crop_map = {c["id"]: c.get("crop_id") for c in departure_crew}
-
-    def _crop_image_url(crop_id: Optional[str]) -> Optional[str]:
-        if not crop_id:
-            return None
-        return f"{base}/uploads/crew-crops/{crop_id}.png"
-
     matched_ids = set()
     for f in faces:
         crew = f.get("crew_member")
@@ -560,7 +567,6 @@ async def arrival_crew_scan(
             name=c["name"],
             is_pilot=c.get("is_pilot", False),
             status="present",
-            crop_image_url=_crop_image_url(departure_crop_map.get(c["id"])),
         )
         for c in departure_crew
         if c["id"] in matched_ids
@@ -571,40 +577,23 @@ async def arrival_crew_scan(
             name=c["name"],
             is_pilot=c.get("is_pilot", False),
             status="missing",
-            crop_image_url=_crop_image_url(departure_crop_map.get(c["id"])),
         )
         for c in departure_crew
         if c["id"] not in matched_ids
     ]
-
-    unidentified_faces = [
-        f for f in faces
+    unidentified_count = sum(
+        1 for f in faces
         if not (f.get("is_match") and f.get("crew_member") and f["crew_member"].get("id") in departure_crew_ids)
-    ]
+    )
+    unidentified_crew = [ArrivalUnidentifiedEntry() for _ in range(unidentified_count)]
 
-    unidentified_crew = []
-    for uf in unidentified_faces:
-        crop_url = None
-        bbox = uf.get("bbox")
-        if bbox and len(bbox) == 4:
-            crop_bytes = face_service.crop_face_from_image(image_bytes, bbox)
-            if crop_bytes:
-                crop_id = str(uuid.uuid4())
-                save_crew_crop(crop_id, crop_bytes)
-                crop_url = _crop_image_url(crop_id)
-
-        row_id = trip_service.save_unidentified_crew_member(
-            movement_id=movement_id,
-            crop_image_url=crop_url,
-        )
-        unidentified_crew.append(ArrivalUnidentifiedEntry(id=row_id, crop_image_url=crop_url))
-
+    # Generate annotated image with boxes for present/missing/unidentified
     annotated_image_url = None
     annotated_bytes = face_service.draw_face_boxes_on_image(image_bytes, faces)
     if annotated_bytes:
         annotated_path = save_crew_scan_image(annotated_bytes)
         if annotated_path:
-            annotated_image_url = f"{base}{annotated_path}"
+            annotated_image_url = resolve_image_url(annotated_path, str(request.base_url))
 
     return ArrivalCrewCheckResponse(
         movement_id=movement_id,
@@ -613,7 +602,7 @@ async def arrival_crew_scan(
         crew_at_departure=len(departure_crew),
         crew_at_arrival=len(present_crew),
         missing_crew_count=len(missing_crew),
-        unidentified_count=len(unidentified_crew),
+        unidentified_count=unidentified_count,
         present_crew=present_crew,
         missing_crew=missing_crew,
         unidentified_crew=unidentified_crew,
@@ -694,9 +683,7 @@ async def arrival_inventory_check(
         ),
     )
 
-    image_url = body.image_url
-    if image_url and not image_url.startswith("http"):
-        image_url = f"{request.base_url.rstrip('/')}{image_url}" if image_url.startswith("/") else image_url
+    image_url = resolve_image_url(body.image_url, str(request.base_url)) if body.image_url else None
 
     return ArrivalInventoryCheckResponse(
         movement_id=movement_id,
@@ -730,20 +717,6 @@ async def register_pending_boat(
             detail="Mobile number is required",
         )
 
-    existing_boat = user_service.get_boat_by_number(boat_number)
-    if existing_boat:
-        sms = _get_sms()
-        sms.send_message(
-            mobile_number,
-            "Your boat registration is still pending. Please complete registration.",
-        )
-        return {
-            "success": True,
-            "boat_id": existing_boat["id"],
-            "boat_number": existing_boat["boat_number"],
-            "message": "Boat already exists. Reminder Registration SMS sent to owner.",
-        }
-
     boat_id = user_service.create_pending_boat(boat_number, mobile_number)
     if not boat_id:
         raise HTTPException(
@@ -755,6 +728,7 @@ async def register_pending_boat(
     message = "This boat is not registered. Please register."
     sms.send_message(mobile_number, message)
 
+    # Notify admin that this boat is not registered (high priority)
     notification_service.create_notification(
         notification_type="boat_not_registered",
         title="Boat not registered",

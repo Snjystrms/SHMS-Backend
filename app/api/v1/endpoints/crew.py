@@ -24,6 +24,7 @@ from app.schemas.crew import (
 from app.schemas.user import ForgotPasswordRequest
 from app.utils.otp_helpers import get_sms
 from app.utils.uploads import save_crew_scan_image, save_crew_crop, load_crew_crop, save_crew_embedding, load_crew_embedding
+from app.utils.url_helpers import resolve_image_url
 
 
 router = APIRouter()
@@ -83,8 +84,7 @@ async def detect_crew_face(
         save_crew_crop(crop_id, crop_bytes)
         path = request.url_for("get_scan_result_crop", crop_id=crop_id)
         path_str = str(path)
-        base_url = str(request.base_url).rstrip("/")
-        crop_image_url = path_str if (path_str.startswith("http://") or path_str.startswith("https://")) else f"{base_url}{path_str}"
+        crop_image_url = resolve_image_url(path_str, str(request.base_url))
 
     return {
         "face_detected": face_detected,
@@ -453,11 +453,10 @@ async def scan_group_photo(
     if annotated_bytes:
         url_path = save_crew_scan_image(annotated_bytes)
         if url_path:
-            base = str(request.base_url).rstrip("/")
-            annotated_image_url = f"{base}{url_path}"
+            annotated_image_url = resolve_image_url(url_path, str(request.base_url))
 
     faces: List[CrewFaceScanResult] = []
-    base_url = str(request.base_url).rstrip("/")
+    request_base = str(request.base_url)
     for f in faces_payload:
         crew_member_data = f.get("crew_member")
         crew_member_obj = None
@@ -479,7 +478,7 @@ async def scan_group_photo(
                     save_crew_embedding(crop_id, emb)
                 path = request.url_for("get_scan_result_crop", crop_id=crop_id)
                 path_str = str(path)
-                crop_image_url = path_str if (path_str.startswith("http://") or path_str.startswith("https://")) else f"{base_url}{path_str}"
+                crop_image_url = resolve_image_url(path_str, request_base)
 
         faces.append(
             CrewFaceScanResult(

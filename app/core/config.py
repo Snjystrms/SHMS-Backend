@@ -5,6 +5,11 @@ from typing import Optional
 class Settings(BaseSettings):
     PROJECT_NAME: str = "SHMS-Backend"
     API_V1_STR: str = "/api/v1"
+
+    # Public URL for absolute image URLs (required when behind reverse proxy).
+    # If set, image URLs use this instead of request.base_url.
+    # Example: https://api.example.com
+    PUBLIC_URL: Optional[str] = None
     
     # APP
     APP_NAME: str = "face-recognition-system"
