@@ -1,5 +1,6 @@
 """Port officer endpoints: boat identification by registration number."""
 import urllib.request
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request
@@ -601,7 +602,9 @@ async def arrival_crew_scan(
         1 for f in faces
         if not (f.get("is_match") and f.get("crew_member") and f["crew_member"].get("id") in departure_crew_ids)
     )
-    unidentified_crew = [ArrivalUnidentifiedEntry() for _ in range(unidentified_count)]
+    unidentified_crew = [
+        ArrivalUnidentifiedEntry(id=str(uuid.uuid4())) for _ in range(unidentified_count)
+    ]
 
     # Generate annotated image with boxes for present/missing/unidentified
     annotated_image_url = None
