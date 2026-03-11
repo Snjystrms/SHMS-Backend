@@ -20,7 +20,7 @@ from app.schemas.user import (
     ForgotPasswordRequest,
 )
 from app.utils.otp_helpers import get_sms, send_otp_for_phone
-from app.schemas.agent_dashboard import AgentDashboardResponse, AgentArrivedBoatItem
+from app.schemas.agent_dashboard import AgentDashboardResponse, AgentArrivedBoatItem, AgentDashboardUser
 from app.schemas.bidding import (
     BiddingRequestCreate,
     BiddingRequestResponse,
@@ -115,6 +115,12 @@ async def get_agent_dashboard(
     data = trip_service.get_agent_dashboard_arrivals()
     arrived_boats = [AgentArrivedBoatItem(**b) for b in (data.get("arrived_boats") or [])]
     return AgentDashboardResponse(
+        user=AgentDashboardUser(
+            id=current_user.get("id", ""),
+            name=current_user.get("name", ""),
+            phone=current_user.get("phone") or "",
+            email=current_user.get("email") or "",
+        ),
         arrived_boats_count=int(data.get("arrived_boats_count") or 0),
         arrived_boats=arrived_boats,
     )

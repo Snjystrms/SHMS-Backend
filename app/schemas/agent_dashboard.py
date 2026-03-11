@@ -13,7 +13,16 @@ class AgentArrivedBoatItem(BaseModel):
     time: str
 
 
+class AgentDashboardUser(BaseModel):
+    """Current agent info for dashboard header."""
+    id: str
+    name: str
+    phone: str = ""
+    email: str = ""
+
+
 class AgentDashboardResponse(BaseModel):
+    user: AgentDashboardUser
     arrived_boats_count: int
     arrived_boats: List[AgentArrivedBoatItem]
 
