@@ -50,6 +50,7 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
                 "departure_details": None,
                 "has_open_departure": False,
                 "last_movement_at": None,
+                "latest_movement_id": None,
             }
 
         latest_id, latest_type, latest_at, port_name, crew_count, image_url = movements[0]
@@ -86,6 +87,7 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
             "has_open_departure": has_open,
             "last_movement_at": latest_at,
             "last_movement_image_url": image_url,
+            "latest_movement_id": str(latest_id) if latest_id else None,
         }
         if has_open and latest_id:
             result["open_departure_movement_id"] = str(latest_id)

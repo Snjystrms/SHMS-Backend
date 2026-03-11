@@ -141,6 +141,7 @@ async def list_my_boats(current_user: dict = Depends(deps.get_boat_owner_user)):
         status_data = trip_service.get_boat_trip_status(boat["id"])
         trip_status = status_data["trip_status"] if status_data else "docked"
         boat["boat_status"] = "At sea" if trip_status == "sailing" else "At harbour"
+        boat["latest_movement_id"] = status_data.get("latest_movement_id") if status_data else None
     return {"success": True, "boats": boats}
 
 
@@ -188,8 +189,10 @@ async def get_my_boat(boat_id: str, current_user: dict = Depends(deps.get_boat_o
     boat = crud_user.get_boat_by_id(boat_id)
     if not boat or boat["boat_owner_id"] != current_user["id"]:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
-    trip_status = (trip_service.get_boat_trip_status(boat_id) or {}).get("trip_status", "docked")
+    status_data = trip_service.get_boat_trip_status(boat_id) or {}
+    trip_status = status_data.get("trip_status", "docked")
     boat["boat_status"] = "At sea" if trip_status == "sailing" else "At harbour"
+    boat["latest_movement_id"] = status_data.get("latest_movement_id")
     return {"success": True, "boat": boat}
 
 
