@@ -45,13 +45,14 @@ def _token_response(user: dict):
 async def register_buyer(buyer_data: BuyerRegisterRequest):
     """
     Buyer Registration:
-    - Accepts name and mobile number.
+    - Accepts name, mobile number, and optional Aadhaar.
     - Stores a pending registration in temp_users.
     - Sends OTP to the mobile number.
     - Buyer user is created after OTP verification during login.
     """
     phone = buyer_data.phone.strip()
     name = buyer_data.name.strip()
+    aadhaar = (buyer_data.aadhaar_number or "").strip() or None
 
     return start_temp_user_registration(
         name=name,
@@ -59,6 +60,7 @@ async def register_buyer(buyer_data: BuyerRegisterRequest):
         duplicate_check=crud_user.get_buyer_by_phone,
         duplicate_error_detail="A buyer with this mobile number already exists",
         success_message="OTP sent to your mobile. Verify to complete buyer registration.",
+        aadhaar_number=aadhaar,
     )
 
 

@@ -74,22 +74,24 @@ def get_role_id_by_name(role_name: str):
         conn.close()
 
 def create_user(user_data: dict, role_id: int):
-    """Create a new user in the database."""
+    """Create a new user in the database. Supports optional aadhaar_number in user_data."""
     user_id = str(uuid.uuid4())
+    aadhaar = (user_data.get("aadhaar_number") or "").strip() or None
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
             """
-            INSERT INTO users (id, name, email, phone, role_id, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+            INSERT INTO users (id, name, email, phone, role_id, aadhaar_number, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
             """,
             (
                 user_id,
                 user_data["name"],
                 user_data.get("email") or None,
                 user_data["phone"],
-                role_id
+                role_id,
+                aadhaar,
             )
         )
         conn.commit()
@@ -374,15 +376,16 @@ def get_officer_by_phone(phone: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
-def create_temp_user(name: str, phone: str) -> bool:
-    """Store pending boat owner in temp_users (before OTP verify). Replaces existing row for same phone."""
+def create_temp_user(name: str, phone: str, aadhaar_number: Optional[str] = None) -> bool:
+    """Store pending registration in temp_users (before OTP verify). Replaces existing row for same phone."""
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute("DELETE FROM temp_users WHERE phone = %s", (phone.strip(),))
+        aadhaar = (aadhaar_number or "").strip() or None
         cur.execute(
-            "INSERT INTO temp_users (id, name, phone) VALUES (%s, %s, %s)",
-            (str(uuid.uuid4()), name.strip(), phone.strip()),
+            "INSERT INTO temp_users (id, name, phone, aadhaar_number) VALUES (%s, %s, %s, %s)",
+            (str(uuid.uuid4()), name.strip(), phone.strip(), aadhaar),
         )
         conn.commit()
         return True
@@ -401,12 +404,17 @@ def get_temp_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     cur = conn.cursor()
     try:
         cur.execute(
-            "SELECT id, name, phone FROM temp_users WHERE phone = %s",
+            "SELECT id, name, phone, aadhaar_number FROM temp_users WHERE phone = %s",
             (phone.strip(),),
         )
         row = cur.fetchone()
         if row:
-            return {"id": str(row[0]), "name": row[1], "phone": row[2]}
+            return {
+                "id": str(row[0]),
+                "name": row[1],
+                "phone": row[2],
+                "aadhaar_number": row[3] if len(row) > 3 else None,
+            }
         return None
     except Exception as e:
         print(f"Error fetching temp user by phone: {e}")

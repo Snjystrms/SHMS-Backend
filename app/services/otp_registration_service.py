@@ -18,6 +18,7 @@ def start_temp_user_registration(
     duplicate_check: Callable[[str], Optional[Dict]],
     duplicate_error_detail: str,
     success_message: str,
+    aadhaar_number: Optional[str] = None,
 ) -> Dict:
     """Create/overwrite temp_users row and send OTP to phone."""
     phone = phone.strip()
@@ -41,7 +42,7 @@ def start_temp_user_registration(
             detail=duplicate_error_detail,
         )
 
-    if not crud_user.create_temp_user(name, phone):
+    if not crud_user.create_temp_user(name, phone, aadhaar_number=aadhaar_number):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save registration",
@@ -101,6 +102,8 @@ def verify_otp_and_login_with_role(
             )
 
         new_user_dict = {"name": temp["name"], "phone": phone}
+        if temp.get("aadhaar_number"):
+            new_user_dict["aadhaar_number"] = temp["aadhaar_number"]
         user_id = crud_user.create_user(new_user_dict, role_id)
         if not user_id:
             raise HTTPException(

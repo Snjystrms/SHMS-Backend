@@ -33,9 +33,10 @@ class AgentVerifyOtpRequest(BaseModel):
 
 
 class BuyerRegisterRequest(BaseModel):
-    """Registration for buyers: name and mobile number (OTP-based login)."""
+    """Registration for buyers: name, mobile number, and optional Aadhaar (OTP-based login)."""
     name: str
     phone: str
+    aadhaar_number: Optional[str] = None
 
 
 class BuyerVerifyOtpRequest(BaseModel):
