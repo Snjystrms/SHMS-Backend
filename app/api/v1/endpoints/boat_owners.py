@@ -23,6 +23,14 @@ from app.api import deps
 from app.utils.otp_helpers import get_sms, send_otp_for_phone
 from app.utils.uploads import ALLOWED_BOAT_DOCUMENT_TYPES, save_boat_document
 from app.services import trip_service
+from app.schemas.trip import (
+    TripDetailsAtSeaResponse,
+    TripDetailsAtHarbourResponse,
+    TripDetailsInventoryItem,
+    TripDetailsCrewMember,
+    TripDetailsDeparture,
+    TripDetailsArrival,
+)
 
 router = APIRouter()
 
@@ -194,6 +202,162 @@ async def get_my_boat(boat_id: str, current_user: dict = Depends(deps.get_boat_o
     boat["boat_status"] = "At sea" if trip_status == "sailing" else "At harbour"
     boat["latest_movement_id"] = status_data.get("latest_movement_id")
     return {"success": True, "boat": boat}
+
+
+def _inventory_to_list(inv: Optional[dict]) -> list:
+    """Convert boat_movement_inventory dict to TripDetailsInventoryItem list."""
+    if not inv:
+        return []
+    items = []
+    if inv.get("diesel_liters") is not None:
+        items.append(
+            TripDetailsInventoryItem(type="diesel", quantity=float(inv["diesel_liters"]), unit="Liters")
+        )
+    if inv.get("ice_blocks") is not None:
+        items.append(
+            TripDetailsInventoryItem(type="ice", quantity=float(inv["ice_blocks"]), unit="Kg")
+        )
+    if inv.get("fishing_net_count") is not None:
+        items.append(
+            TripDetailsInventoryItem(type="fishing_nets", quantity=float(inv["fishing_net_count"]), unit="count")
+        )
+    plastic = (inv.get("plastic_bottle_count") or 0) + (inv.get("plastic_bag_count") or 0)
+    if plastic > 0:
+        items.append(
+            TripDetailsInventoryItem(type="plastic_items", quantity=float(plastic), unit="count")
+        )
+    return items
+
+
+def _crew_to_list(crew: list) -> list:
+    """Convert crew_members from trip_service to TripDetailsCrewMember list."""
+    return [
+        TripDetailsCrewMember(
+            id=c["id"],
+            name=c["name"],
+            role="Pilot" if c.get("is_pilot") else "Crew",
+        )
+        for c in crew
+    ]
+
+
+@router.get(
+    "/boats/{boat_id}/trip-details",
+    response_model=TripDetailsAtSeaResponse | TripDetailsAtHarbourResponse,
+)
+async def get_boat_trip_details(
+    boat_id: str,
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """
+    Get trip details for boat owner. Returns different response based on latest movement:
+    - If latest movement is departure -> At Sea response (current trip, inventory, crew)
+    - If latest movement is arrival or partial_arrival -> At Harbour response (arrival info, items at departure, crew).
+    Missing items, missing crew, and unidentified crew are empty until persistence is added.
+    """
+    boat = crud_user.get_boat_by_id(boat_id)
+    if not boat or boat["boat_owner_id"] != current_user["id"]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
+
+    status_data = trip_service.get_boat_trip_status(boat_id)
+    if not status_data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
+
+    trip_status = status_data.get("trip_status", "docked")
+    latest_movement_id = status_data.get("latest_movement_id")
+
+    if not latest_movement_id or trip_status == "docked":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No trip data for this boat",
+        )
+
+    boat_number = boat.get("boat_number") or ""
+    boat_name = boat.get("boat_name")
+    vessel_type = boat.get("boat_type")
+
+    if trip_status == "sailing":
+        # At Sea: departure, inventory, crew
+        dep_details = status_data.get("departure_details") or {}
+        dep_at = dep_details.get("departure_at")
+        from_port = dep_details.get("from_port") or boat.get("harbor_name") or "Unknown"
+        if not dep_at:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Departure details not found")
+
+        inv = trip_service.get_departure_inventory(latest_movement_id)
+        crew_raw = trip_service.get_departure_crew_with_details(latest_movement_id)
+        crew_count = status_data.get("departure_details", {}).get("crew_count") or len(crew_raw)
+
+        return TripDetailsAtSeaResponse(
+            view_type="at_sea",
+            boat_id=boat_id,
+            boat_number=boat_number,
+            boat_name=boat_name,
+            trip_status="current_trip",
+            departure=TripDetailsDeparture(departure_at=dep_at, from_port=from_port),
+            vessel_type=vessel_type,
+            total_crew=crew_count,
+            inventory_list=_inventory_to_list(inv),
+            crew_members=_crew_to_list(crew_raw),
+        )
+
+    # At Harbour: arrival or partial_arrival
+    movement = trip_service.get_movement_with_departure_arrival(latest_movement_id, boat_id)
+    if not movement:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Movement not found")
+
+    movement_type = movement.get("movement_type")
+    crew_raw = trip_service.get_departure_crew_with_details(latest_movement_id)
+    inv = trip_service.get_departure_inventory(latest_movement_id)
+    crew_count = movement.get("crew_count") or len(crew_raw)
+
+    departure = None
+    arrival = None
+
+    harbor_name = movement.get("harbor_name") or "Unknown"
+    port_name = movement.get("port_name") or harbor_name
+
+    if movement_type == "arrival":
+        dep_at = movement.get("departure_at") or movement.get("movement_at")
+        arr_at = movement.get("movement_at")
+        if dep_at:
+            departure = TripDetailsDeparture(
+                departure_at=dep_at,
+                from_port=port_name,
+            )
+        if arr_at:
+            arrival = TripDetailsArrival(
+                arrival_at=arr_at,
+                to_port=harbor_name,
+            )
+    elif movement_type == "partial_arrival":
+        arr_at = movement.get("movement_at")
+        if arr_at:
+            arrival = TripDetailsArrival(
+                arrival_at=arr_at,
+                to_port=port_name or harbor_name,
+            )
+
+    return TripDetailsAtHarbourResponse(
+        view_type="at_harbour",
+        boat_id=boat_id,
+        boat_number=boat_number,
+        boat_name=boat_name,
+        trip_status="arrived",
+        departure=departure,
+        arrival=arrival,
+        vessel_type=vessel_type,
+        total_crew=crew_count,
+        list_of_items_while_departure=_inventory_to_list(inv),
+        list_of_missing_items=[],
+        missing_crew_members=[],
+        unidentified_crew_members=[],
+        reason_for_loss=None,
+        additional_details=None,
+        crew_members=_crew_to_list(crew_raw),
+        partial_arrival_reason=movement.get("partial_arrival_reason"),
+        partial_arrival_details=movement.get("partial_arrival_details"),
+    )
 
 
 @router.put("/boats/{boat_id}")

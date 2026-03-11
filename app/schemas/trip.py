@@ -258,3 +258,96 @@ class BoatMovementHistoryResponse(BaseModel):
     date_filter: HistoryDateFilter
     total_records: int
     records: List[BoatMovementHistoryItem]
+
+
+# ----- Boat owner trip details (At Sea / At Harbour) -----
+
+
+class TripDetailsInventoryItem(BaseModel):
+    """One inventory item for trip details (diesel, ice, nets, plastics)."""
+
+    type: str  # diesel, ice, fishing_nets, plastic_items
+    quantity: float
+    unit: str  # Liters, Kg, count
+
+
+class TripDetailsCrewMember(BaseModel):
+    """One crew member in trip details."""
+
+    id: str
+    name: str
+    role: str  # Pilot or Crew
+
+
+class TripDetailsDeparture(BaseModel):
+    """Departure info for trip details."""
+
+    departure_at: datetime
+    from_port: str
+
+
+class TripDetailsArrival(BaseModel):
+    """Arrival info for trip details."""
+
+    arrival_at: datetime
+    to_port: str
+
+
+class TripDetailsMissingItem(BaseModel):
+    """One missing item at arrival (for At Harbour view)."""
+
+    type: str
+    quantity: float
+
+
+class TripDetailsMissingCrewMember(BaseModel):
+    """One missing crew member at arrival."""
+
+    id: str
+    name: str
+
+
+class TripDetailsUnidentifiedCrewMember(BaseModel):
+    """One unidentified person at arrival (not in departure crew)."""
+
+    id: str
+    crop_image_url: Optional[str] = None
+    note: str = "This individual does not match any registered crew from this trip's departure."
+
+
+class TripDetailsAtSeaResponse(BaseModel):
+    """Boat owner trip details when boat is at sea (latest movement is departure)."""
+
+    view_type: Literal["at_sea"] = "at_sea"
+    boat_id: str
+    boat_number: str
+    boat_name: Optional[str] = None
+    trip_status: Literal["current_trip"] = "current_trip"
+    departure: TripDetailsDeparture
+    vessel_type: Optional[str] = None
+    total_crew: int = 0
+    inventory_list: List[TripDetailsInventoryItem] = []
+    crew_members: List[TripDetailsCrewMember] = []
+
+
+class TripDetailsAtHarbourResponse(BaseModel):
+    """Boat owner trip details when boat is at harbour (latest movement is arrival or partial_arrival)."""
+
+    view_type: Literal["at_harbour"] = "at_harbour"
+    boat_id: str
+    boat_number: str
+    boat_name: Optional[str] = None
+    trip_status: Literal["arrived"] = "arrived"
+    departure: Optional[TripDetailsDeparture] = None
+    arrival: Optional[TripDetailsArrival] = None
+    vessel_type: Optional[str] = None
+    total_crew: int = 0
+    list_of_items_while_departure: List[TripDetailsInventoryItem] = []
+    list_of_missing_items: List[TripDetailsMissingItem] = []
+    missing_crew_members: List[TripDetailsMissingCrewMember] = []
+    unidentified_crew_members: List[TripDetailsUnidentifiedCrewMember] = []
+    reason_for_loss: Optional[str] = None
+    additional_details: Optional[str] = None
+    crew_members: List[TripDetailsCrewMember] = []
+    partial_arrival_reason: Optional[str] = None
+    partial_arrival_details: Optional[str] = None

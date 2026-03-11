@@ -495,6 +495,50 @@ def get_trip_movement_by_id(movement_id: str, boat_id: Optional[str] = None) -> 
         conn.close()
 
 
+def get_movement_with_departure_arrival(
+    movement_id: str, boat_id: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Return movement with departure_at and arrival info for boat owner trip details.
+    For arrival: has departure_at, movement_at (arrival), port_name (to_port).
+    For partial_arrival: has movement_at, port_name, partial_arrival_reason, partial_arrival_details.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT m.id, m.boat_id, m.movement_type, m.movement_at, m.departure_at,
+                   m.port_name, m.crew_count, m.image_url, m.partial_arrival_reason,
+                   m.partial_arrival_details, b.harbor_name
+            FROM boat_movements m
+            JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
+            WHERE m.id = %s AND m.boat_id = %s
+              AND m.movement_type IN ('departure', 'arrival', 'partial_arrival')
+            """,
+            (movement_id, boat_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "id": str(row[0]),
+            "boat_id": str(row[1]),
+            "movement_type": row[2],
+            "movement_at": row[3],
+            "departure_at": row[4],
+            "port_name": row[5],
+            "crew_count": row[6],
+            "image_url": row[7],
+            "partial_arrival_reason": row[8],
+            "partial_arrival_details": row[9],
+            "harbor_name": row[10],
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+
 def get_departure_crew_with_details(movement_id: str) -> List[Dict[str, Any]]:
     """Return list of crew members (id, name, etc.) attached to this departure movement."""
     conn = get_db_connection()
