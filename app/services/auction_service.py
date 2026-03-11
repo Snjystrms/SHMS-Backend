@@ -322,16 +322,26 @@ def end_auction(auction_id: str, seller_id: str) -> Optional[Dict[str, Any]]:
 
 
 def list_bids_for_auction(auction_id: str) -> List[Dict[str, Any]]:
-    """Return all bids for a specific auction, ordered by amount DESC then created_at ASC."""
+    """Return all bids for a specific auction, ordered by amount DESC then created_at ASC.
+
+    Includes bidder_name joined from users table for display in clients.
+    """
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute(
             """
-            SELECT id, auction_id, bidder_id, amount, created_at
-            FROM bids
-            WHERE auction_id = %s
-            ORDER BY amount DESC, created_at ASC
+            SELECT
+                b.id,
+                b.auction_id,
+                b.bidder_id,
+                b.amount,
+                b.created_at,
+                u.name AS bidder_name
+            FROM bids AS b
+            JOIN users AS u ON u.id = b.bidder_id
+            WHERE b.auction_id = %s
+            ORDER BY b.amount DESC, b.created_at ASC
             """,
             (auction_id,),
         )
@@ -343,6 +353,7 @@ def list_bids_for_auction(auction_id: str) -> List[Dict[str, Any]]:
                 "bidder_id": str(r[2]),
                 "amount": float(r[3]),
                 "created_at": r[4],
+                "bidder_name": r[5],
             }
             for r in rows
         ]
@@ -420,12 +431,27 @@ def create_bid(auction_id: str, bidder_id: str, amount: float) -> Tuple[Optional
         )
         conn.commit()
 
+        # Fetch bidder name for richer responses
+        bidder_name: Optional[str] = None
+        try:
+            cur.execute(
+                "SELECT name FROM users WHERE id = %s",
+                (bidder_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                bidder_name = row[0]
+        except Exception as e:
+            # Log but don't fail the whole bid if name lookup fails
+            print(f"Error fetching bidder name for {bidder_id}: {e}")
+
         return {
             "id": bid_id,
             "auction_id": auction_id,
             "bidder_id": bidder_id,
             "amount": amount,
             "created_at": created_at,
+            "bidder_name": bidder_name,
         }, None
     except Exception as e:
         conn.rollback()
@@ -454,6 +480,17 @@ async def broadcast_bid(auction_id: str, bid: Dict[str, Any]) -> None:
     # Send full state on each bid so all clients can render complete bid history.
     auction = get_auction_by_id(auction_id)
     bids = list_bids_for_auction(auction_id)
+
+    # Enrich latest bid with bidder_name (joined in list_bids_for_auction)
+    bidder_name = None
+    try:
+        matched = next((b for b in bids if b.get("id") == bid.get("id")), None)
+        if matched:
+            bidder_name = matched.get("bidder_name")
+    except Exception:
+        bidder_name = None
+    if bidder_name is not None:
+        bid["bidder_name"] = bidder_name
     full_update = {
         "type": "update",
         "auction": auction,
@@ -465,6 +502,7 @@ async def broadcast_bid(auction_id: str, bid: Dict[str, Any]) -> None:
         "auction_id": auction_id,
         "amount": bid["amount"],
         "bidder_id": bid["bidder_id"],
+        "bidder_name": bid.get("bidder_name"),
         "created_at": bid.get("created_at"),
         "current_price": bid["amount"],
         "status": "active",

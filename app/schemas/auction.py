@@ -55,6 +55,7 @@ class Bid(BaseModel):
     bidder_id: str
     amount: float
     created_at: datetime
+    bidder_name: Optional[str] = None
 
     class Config:
         from_attributes = True
