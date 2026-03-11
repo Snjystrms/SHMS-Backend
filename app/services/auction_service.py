@@ -12,6 +12,19 @@ from app.api.v1.endpoints.auction_ws import active_auction_connections
 # Current time in IST for status checks (start_time/end_time treated as IST).
 # PostgreSQL: NOW() in UTC + 5h30m approximates IST for comparison.
 _NOW_IST_SQL = "NOW() + INTERVAL '5 hours 30 minutes'"
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _normalize_to_ist(dt: datetime) -> datetime:
+    """
+    Normalize datetimes to IST for consistent comparisons/storage.
+
+    - If timezone-aware: convert to IST.
+    - If timezone-naive: treat as already-IST (common for UI date-time pickers).
+    """
+    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+        return dt.replace(tzinfo=_IST)
+    return dt.astimezone(_IST)
 
 
 def _auction_from_row(row) -> Dict[str, Any]:
@@ -37,7 +50,15 @@ def create_auction(
     end_time: datetime,
 ) -> Optional[Dict[str, Any]]:
     """Insert new auction into DB."""
-    if end_time <= start_time:
+    fish_name = (fish_name or "").strip()
+    if not fish_name:
+        return None
+    if initial_price is None or initial_price <= 0:
+        return None
+
+    start_time_ist = _normalize_to_ist(start_time)
+    end_time_ist = _normalize_to_ist(end_time)
+    if end_time_ist <= start_time_ist:
         return None
 
     auction_id = str(uuid.uuid4())
@@ -55,22 +76,22 @@ def create_auction(
             (
                 auction_id,
                 seller_id,
-                fish_name.strip(),
+                fish_name,
                 initial_price,
                 initial_price,
-                start_time,
-                end_time,
+                start_time_ist,
+                end_time_ist,
             ),
         )
         conn.commit()
         return {
             "id": auction_id,
             "seller_id": seller_id,
-            "fish_name": fish_name.strip(),
+            "fish_name": fish_name,
             "initial_price": initial_price,
             "current_price": initial_price,
-            "start_time": start_time,
-            "end_time": end_time,
+            "start_time": start_time_ist,
+            "end_time": end_time_ist,
             "status": "scheduled",
             "winner_id": None,
         }
@@ -200,8 +221,13 @@ def update_auction(
             return None
 
         new_fish_name = fish_name.strip() if fish_name is not None else auction["fish_name"]
-        new_start_time = start_time or auction["start_time"]
-        new_end_time = end_time or auction["end_time"]
+        if not new_fish_name:
+            return None
+
+        existing_start = auction["start_time"]
+        existing_end = auction["end_time"]
+        new_start_time = _normalize_to_ist(start_time) if start_time is not None else _normalize_to_ist(existing_start)
+        new_end_time = _normalize_to_ist(end_time) if end_time is not None else _normalize_to_ist(existing_end)
 
         if new_end_time <= new_start_time:
             return None
