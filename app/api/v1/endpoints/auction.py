@@ -15,17 +15,17 @@ async def create_auction(
     current_user: dict = Depends(deps.get_boat_owner_user),
 ):
     """Create a new auction for fish by the current boat owner."""
-    auction = auction_service.create_auction(
+    auction, err = auction_service.create_auction(
         seller_id=current_user["id"],
         fish_name=auction_in.fish_name,
         initial_price=auction_in.initial_price,
         start_time=auction_in.start_time,
         end_time=auction_in.end_time,
     )
-    if not auction:
+    if err or not auction:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid auction data (check times and price).",
+            detail=err or "Invalid auction data (check times and price).",
         )
     return auction
 

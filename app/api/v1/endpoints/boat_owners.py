@@ -1,6 +1,6 @@
 """Boat owner registration, OTP login, and boat CRUD (own boats only)."""
 from datetime import timedelta
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, status, UploadFile
 from app.core import security
@@ -243,7 +243,7 @@ def _crew_to_list(crew: list) -> list:
 
 @router.get(
     "/boats/{boat_id}/trip-details",
-    response_model=TripDetailsAtSeaResponse | TripDetailsAtHarbourResponse,
+    response_model=Union[TripDetailsAtSeaResponse, TripDetailsAtHarbourResponse],
 )
 async def get_boat_trip_details(
     boat_id: str,

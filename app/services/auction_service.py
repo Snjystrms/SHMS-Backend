@@ -28,15 +28,17 @@ def _normalize_to_ist(dt: datetime) -> datetime:
 
 
 def _auction_from_row(row) -> Dict[str, Any]:
-    """Map auctions table row to dict."""
+    """Map auctions table row to dict. Times normalized to IST for consistent API response."""
+    start = row[5]
+    end = row[6]
     return {
         "id": str(row[0]),
         "seller_id": str(row[1]),
         "fish_name": row[2],
         "initial_price": float(row[3]),
         "current_price": float(row[4]),
-        "start_time": row[5],
-        "end_time": row[6],
+        "start_time": _normalize_to_ist(start) if start else None,
+        "end_time": _normalize_to_ist(end) if end else None,
         "status": row[7],
         "winner_id": str(row[8]) if row[8] else None,
     }
@@ -48,18 +50,18 @@ def create_auction(
     initial_price: float,
     start_time: datetime,
     end_time: datetime,
-) -> Optional[Dict[str, Any]]:
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Insert new auction into DB."""
     fish_name = (fish_name or "").strip()
     if not fish_name:
-        return None
+        return None, "fish_name is required"
     if initial_price is None or initial_price <= 0:
-        return None
+        return None, "initial_price must be > 0"
 
     start_time_ist = _normalize_to_ist(start_time)
     end_time_ist = _normalize_to_ist(end_time)
     if end_time_ist <= start_time_ist:
-        return None
+        return None, "end_time must be after start_time"
 
     auction_id = str(uuid.uuid4())
     conn = get_db_connection()
@@ -94,11 +96,12 @@ def create_auction(
             "end_time": end_time_ist,
             "status": "scheduled",
             "winner_id": None,
-        }
+        }, None
     except Exception as e:
         conn.rollback()
-        print(f"Error creating auction: {e}")
-        return None
+        err = f"Failed to create auction in DB: {e}"
+        print(err)
+        return None, err
     finally:
         cur.close()
         conn.close()
