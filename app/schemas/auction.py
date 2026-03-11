@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 
 AuctionStatus = Literal["scheduled", "active", "completed", "cancelled"]
+AuctionType = Literal["open_box", "dutch"]
 
 
 class AuctionCreate(BaseModel):
@@ -14,6 +15,10 @@ class AuctionCreate(BaseModel):
     initial_price: float = Field(..., gt=0, description="Starting price for the auction")
     start_time: datetime = Field(..., description="When the auction becomes active")
     end_time: datetime = Field(..., description="When the auction ends")
+    auction_type: AuctionType = Field(
+        default="open_box",
+        description="Auction format: open_box or dutch",
+    )
 
 
 class Auction(BaseModel):
@@ -25,9 +30,10 @@ class Auction(BaseModel):
     initial_price: float
     current_price: float
     start_time: datetime
-    end_time: datetime
     status: AuctionStatus
     winner_id: Optional[str] = None
+    bidding_request_id: Optional[str] = None
+    auction_type: AuctionType = "open_box"
 
     class Config:
         from_attributes = True
@@ -39,6 +45,8 @@ class AuctionUpdate(BaseModel):
     fish_name: Optional[str] = Field(None, description="Updated fish name or type")
     start_time: Optional[datetime] = Field(None, description="Updated auction start time")
     end_time: Optional[datetime] = Field(None, description="Updated auction end time")
+    bidding_request_id: Optional[str] = Field(None, description="Optional link to an approved bidding request")
+    auction_type: Optional[AuctionType] = Field(None, description="Auction format: open_box or dutch")
 
 
 class BidCreate(BaseModel):

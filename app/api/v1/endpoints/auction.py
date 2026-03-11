@@ -9,18 +9,26 @@ from app.services import auction_service
 router = APIRouter()
 
 
-@router.post("/auctions", response_model=Auction, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/auctions/{bidding_request_id}",
+    response_model=Auction,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_auction(
+    bidding_request_id: str,
     auction_in: AuctionCreate,
-    current_user: dict = Depends(deps.get_boat_owner_user),
+    current_user: dict = Depends(deps.get_boat_owner_or_agent_user),
 ):
-    """Create a new auction for fish by the current boat owner."""
+    """Create a new auction for fish, linked to an approved bidding request. Boat owner or agent can create."""
     auction, err = auction_service.create_auction(
-        seller_id=current_user["id"],
+        caller_id=current_user["id"],
+        caller_role=current_user["role"],
         fish_name=auction_in.fish_name,
         initial_price=auction_in.initial_price,
         start_time=auction_in.start_time,
         end_time=auction_in.end_time,
+        bidding_request_id=bidding_request_id,
+        auction_type=auction_in.auction_type,
     )
     if err or not auction:
         raise HTTPException(
@@ -62,11 +70,13 @@ async def update_auction(
         fish_name=auction_in.fish_name,
         start_time=auction_in.start_time,
         end_time=auction_in.end_time,
+        bidding_request_id=auction_in.bidding_request_id,
+        auction_type=auction_in.auction_type,
     )
     if not updated:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Could not update auction (not found, not owner, or invalid time/status).",
+            detail="Could not update auction (not found, not owner, invalid time/status, or invalid bidding request).",
         )
     return updated
 

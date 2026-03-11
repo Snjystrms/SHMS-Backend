@@ -71,6 +71,17 @@ def get_agent_user(current_user: Dict = Depends(get_current_user)) -> Dict:
     return current_user
 
 
+def get_boat_owner_or_agent_user(current_user: Dict = Depends(get_current_user)) -> Dict:
+    """Require current user to be a boat owner or agent."""
+    role = current_user.get("role")
+    if role not in ["boat_owner", "agent"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Boat owner or agent access required",
+        )
+    return current_user
+
+
 def get_buyer_user(current_user: Dict = Depends(get_current_user)) -> Dict:
     """Require current user to be a buyer."""
     if current_user.get("role") != "buyer":
