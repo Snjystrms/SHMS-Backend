@@ -1,7 +1,8 @@
 from datetime import timedelta
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.api import deps
 from app.core import security
 from app.core.config import settings
 from app.services import user_service as crud_user
@@ -16,6 +17,12 @@ from app.schemas.user import (
     ForgotPasswordRequest,
 )
 from app.utils.otp_helpers import send_otp_for_phone
+from app.services import buyer_dashboard_service
+from app.schemas.buyer_dashboard import (
+    BuyerDashboardResponse,
+    BuyerDashboardUser,
+    LiveAuctionItem,
+)
 
 
 router = APIRouter()
@@ -39,6 +46,25 @@ def _token_response(user: dict):
             "role": user["role"],
         },
     }
+
+
+@router.get("/dashboard", response_model=BuyerDashboardResponse)
+async def get_buyer_dashboard(
+    current_user: dict = Depends(deps.get_buyer_user),
+):
+    """Buyer dashboard: summary stats and live auctions with my bid."""
+    data = buyer_dashboard_service.get_buyer_dashboard(buyer_id=current_user["id"])
+    live_auctions = [LiveAuctionItem(**item) for item in data.get("live_auctions", [])]
+    return BuyerDashboardResponse(
+        user=BuyerDashboardUser(
+            id=str(current_user.get("id", "")),
+            name=str(current_user.get("name", "")),
+        ),
+        total_bids=data.get("total_bids", 0),
+        pending_delivery=data.get("pending_delivery", 0),
+        live_auctions=live_auctions,
+        updated_at=data.get("updated_at"),
+    )
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
