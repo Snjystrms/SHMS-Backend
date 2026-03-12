@@ -1,4 +1,5 @@
 """Boat owner registration, OTP login, and boat CRUD (own boats only)."""
+import json
 from datetime import timedelta
 from typing import Optional, Union
 
@@ -23,6 +24,13 @@ from app.api import deps
 from app.utils.otp_helpers import get_sms, send_otp_for_phone
 from app.utils.uploads import ALLOWED_BOAT_DOCUMENT_TYPES, save_boat_document
 from app.services import trip_service
+from app.services import boat_owner_delivery_service
+from app.schemas.boat_owner_delivery import (
+    ScanDeliveryRequest,
+    ScanDeliveryResponse,
+    RecordDeliveryRequest,
+    RecordDeliveryResponse,
+)
 from app.schemas.trip import (
     TripDetailsAtSeaResponse,
     TripDetailsAtHarbourResponse,
@@ -414,6 +422,69 @@ async def delete_my_boat(boat_id: str, current_user: dict = Depends(deps.get_boa
     if not ok:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete boat")
     return {"success": True, "message": "Boat deleted"}
+
+
+# ----- Delivery (scan QR and record) -----
+@router.post("/deliveries/scan", response_model=ScanDeliveryResponse)
+async def scan_delivery_qr(
+    body: ScanDeliveryRequest,
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """
+    Resolve QR payload to delivery details. Boat owner scans buyer's QR code.
+    Provide either qr_payload (JSON string) or auction_id + buyer_id.
+    """
+    auction_id = body.auction_id
+    buyer_id = body.buyer_id
+
+    if body.qr_payload:
+        try:
+            payload = json.loads(body.qr_payload)
+            auction_id = payload.get("auction_id") or auction_id
+            buyer_id = payload.get("buyer_id") or buyer_id
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid qr_payload: expected JSON with auction_id and buyer_id",
+            )
+
+    if not auction_id or not buyer_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide auction_id and buyer_id, or qr_payload",
+        )
+
+    detail, err = boat_owner_delivery_service.get_delivery_by_qr(
+        auction_id=auction_id,
+        buyer_id=buyer_id,
+        boat_owner_id=current_user["id"],
+    )
+    if err:
+        if "does not belong" in err:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=err)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err)
+
+    return ScanDeliveryResponse(**detail)
+
+
+@router.post("/deliveries/{auction_id}/record", response_model=RecordDeliveryResponse)
+async def record_delivery(
+    auction_id: str,
+    body: RecordDeliveryRequest,
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """Record delivered quantity for an auction. Only the boat owner (seller) can record."""
+    _, err = boat_owner_delivery_service.record_delivery(
+        auction_id=auction_id,
+        boat_owner_id=current_user["id"],
+        delivered_quantity=body.delivered_quantity,
+    )
+    if err:
+        if "does not belong" in err:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=err)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
+
+    return RecordDeliveryResponse(success=True, message="Delivery recorded successfully")
 
 
 # ----- Bidding Requests (boat owner side) -----

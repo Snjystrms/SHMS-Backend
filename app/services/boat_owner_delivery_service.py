@@ -1,0 +1,183 @@
+"""Boat owner delivery service: scan QR and record delivery for auctions sold by boat owner."""
+
+import uuid
+from datetime import datetime, timezone, timedelta
+from typing import Any, Dict, Optional, Tuple
+
+from app.db.session import get_db_connection
+from app.services import user_service
+from app.services.buyer_dashboard_service import (
+    _auction_identifier,
+    _auction_type_display,
+    _format_start_time,
+)
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _normalize_uuid(value: str) -> str:
+    """Normalize to standard UUID string for consistent DB comparison."""
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError):
+        return str(value)
+
+
+def get_delivery_by_qr(
+    auction_id: str, buyer_id: str, boat_owner_id: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Fetch delivery detail for an auction by QR payload (auction_id, buyer_id).
+    Only the boat owner (seller) can access this.
+    Returns (detail_dict, None) on success, or (None, error_message) on failure.
+    """
+    aid = _normalize_uuid(auction_id)
+    bid = _normalize_uuid(buyer_id)
+    owner_id = _normalize_uuid(boat_owner_id)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                a.id,
+                a.seller_id,
+                a.fish_name,
+                a.auction_type,
+                a.start_time,
+                a.delivered_quantity,
+                b.boat_number
+            FROM auctions a
+            LEFT JOIN boat_movements m ON m.id = a.movement_id
+            LEFT JOIN bidding_requests br ON br.id = a.bidding_request_id
+            LEFT JOIN boats b ON b.id = COALESCE(m.boat_id, br.boat_id) AND b.deleted_at IS NULL
+            WHERE a.id = %s AND a.winner_id = %s AND a.status = 'completed'
+            """,
+            (aid, bid),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None, "Auction not found or buyer did not win"
+
+        seller_id = str(r[1]) if r[1] else None
+        if seller_id != owner_id:
+            return None, "Auction does not belong to you"
+
+        auction_id_str = str(r[0])
+        fish_name = r[2] or ""
+        auction_type = r[3] or "open_box"
+        start_time = r[4]
+        delivered_quantity = float(r[5] or 0)
+        boat_number = r[6]
+
+        cur.execute(
+            """
+            SELECT amount, quantity FROM bids
+            WHERE auction_id = %s AND bidder_id = %s
+            ORDER BY amount DESC LIMIT 1
+            """,
+            (auction_id_str, bid),
+        )
+        bid_row = cur.fetchone()
+        my_bid = float(bid_row[0]) if bid_row else 0.0
+        required_quantity = float(bid_row[1]) if bid_row and bid_row[1] is not None else 0.0
+
+        user = user_service.get_user_by_id(bid)
+        buyer_name = user.get("name", "") if user else ""
+
+        return {
+            "auction_id": auction_id_str,
+            "buyer_name": buyer_name,
+            "bid_price": my_bid,
+            "auction_type": _auction_type_display(auction_type),
+            "requested_quantity": required_quantity,
+            "delivered_quantity": delivered_quantity,
+            "fish_type": fish_name,
+            "start_time": _format_start_time(start_time),
+            "auction_identifier": _auction_identifier(auction_id_str, boat_number),
+            "is_already_delivered": delivered_quantity > 0,
+        }, None
+    except Exception as e:
+        print(f"Error fetching delivery by QR: {e}")
+        return None, "Failed to fetch delivery details"
+    finally:
+        cur.close()
+        conn.close()
+
+
+def record_delivery(
+    auction_id: str, boat_owner_id: str, delivered_quantity: float
+) -> Tuple[bool, Optional[str]]:
+    """
+    Record delivered quantity for an auction. Only the boat owner (seller) can record.
+    Returns (True, None) on success, or (False, error_message) on failure.
+    """
+    aid = _normalize_uuid(auction_id)
+    owner_id = _normalize_uuid(boat_owner_id)
+
+    if delivered_quantity <= 0:
+        return False, "Delivered quantity must be greater than 0"
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT a.id, a.seller_id, a.winner_id, a.delivered_quantity
+            FROM auctions a
+            WHERE a.id = %s AND a.status = 'completed'
+            """,
+            (aid,),
+        )
+        r = cur.fetchone()
+        if not r:
+            return False, "Auction not found or not completed"
+
+        seller_id = str(r[1]) if r[1] else None
+        winner_id = str(r[2]) if r[2] else None
+        existing_delivered = float(r[3] or 0)
+
+        if seller_id != owner_id:
+            return False, "Auction does not belong to you"
+
+        if existing_delivered > 0:
+            return False, "Delivery already recorded"
+
+        if not winner_id:
+            return False, "Auction has no winner"
+
+        cur.execute(
+            """
+            SELECT quantity FROM bids
+            WHERE auction_id = %s AND bidder_id = %s
+            ORDER BY amount DESC LIMIT 1
+            """,
+            (aid, winner_id),
+        )
+        bid_row = cur.fetchone()
+        required_quantity = float(bid_row[0]) if bid_row and bid_row[0] is not None else 0.0
+
+        if required_quantity > 0 and delivered_quantity > required_quantity:
+            return False, f"Delivered quantity cannot exceed requested quantity ({required_quantity} KG)"
+
+        cur.execute(
+            """
+            UPDATE auctions
+            SET delivered_quantity = %s, updated_at = NOW()
+            WHERE id = %s AND seller_id = %s
+            """,
+            (delivered_quantity, aid, owner_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            return False, "Failed to update delivery"
+
+        return True, None
+    except Exception as e:
+        conn.rollback()
+        print(f"Error recording delivery: {e}")
+        return False, "Failed to record delivery"
+    finally:
+        cur.close()
+        conn.close()
