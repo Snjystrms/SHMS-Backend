@@ -18,10 +18,16 @@ from app.schemas.user import (
 )
 from app.utils.otp_helpers import send_otp_for_phone
 from app.services import buyer_dashboard_service
+from app.services import buyer_delivery_service
 from app.schemas.buyer_dashboard import (
     BuyerDashboardResponse,
     BuyerDashboardUser,
     LiveAuctionItem,
+)
+from app.schemas.buyer_delivery import (
+    DeliveryDetail,
+    DeliveryListItem,
+    DeliveryListResponse,
 )
 
 
@@ -65,6 +71,35 @@ async def get_buyer_dashboard(
         live_auctions=live_auctions,
         updated_at=data.get("updated_at"),
     )
+
+
+@router.get("/deliveries", response_model=DeliveryListResponse)
+async def list_buyer_deliveries(
+    current_user: dict = Depends(deps.get_current_user),
+):
+    """List deliveries (auctions won by the current user). Any authenticated user who won can see their deliveries."""
+    deliveries = buyer_delivery_service.list_deliveries(buyer_id=current_user["id"])
+    return DeliveryListResponse(
+        deliveries=[DeliveryListItem(**d) for d in deliveries],
+    )
+
+
+@router.get("/deliveries/{delivery_id}", response_model=DeliveryDetail)
+async def get_buyer_delivery_detail(
+    delivery_id: str,
+    current_user: dict = Depends(deps.get_current_user),
+):
+    """Get delivery detail for QR screen. Returns 404 if not found or not owned by buyer."""
+    detail = buyer_delivery_service.get_delivery_detail(
+        delivery_id=delivery_id,
+        buyer_id=current_user["id"],
+    )
+    if not detail:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Delivery not found",
+        )
+    return DeliveryDetail(**detail)
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
