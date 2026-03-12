@@ -257,22 +257,11 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
     ist = ZoneInfo("Asia/Kolkata")
     now_ist = datetime.now(timezone.utc).astimezone(ist)
     today_start_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end_ist = today_start_ist + timedelta(days=1)
 
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute(
-            """
-            SELECT COUNT(*)
-            FROM boat_movements m
-            JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
-            WHERE m.movement_type = 'arrival'
-              AND m.movement_at >= %s
-            """,
-            (today_start_ist,),
-        )
-        arrived_count = cur.fetchone()[0] or 0
-
         cur.execute(
             """
             SELECT
@@ -280,7 +269,8 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
                 b.boat_number,
                 b.boat_name,
                 m.movement_at,
-                br.status AS bidding_request_status
+                br.status AS bidding_request_status,
+                COUNT(*) OVER() AS arrived_count
             FROM boat_movements m
             JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
             LEFT JOIN (
@@ -291,11 +281,13 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
             ) br ON br.boat_id = b.id
             WHERE m.movement_type = 'arrival'
               AND m.movement_at >= %s
+              AND m.movement_at < %s
             ORDER BY m.movement_at DESC
             """,
-            (agent_id, today_start_ist),
+            (agent_id, today_start_ist, today_end_ist),
         )
         rows = cur.fetchall()
+        arrived_count = int(rows[0][5]) if rows else 0
         boats = [
             {
                 "boat_id": str(r[0]),
@@ -313,7 +305,7 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
         ]
 
         return {
-            "arrived_boats_count": int(arrived_count),
+            "arrived_boats_count": arrived_count,
             "arrived_boats": boats,
             "updated_at": now_ist,
         }
@@ -330,62 +322,77 @@ def get_boat_owner_dashboard(boat_owner_id: str) -> Dict[str, Any]:
     ist = ZoneInfo("Asia/Kolkata")
     now_ist = datetime.now(timezone.utc).astimezone(ist)
     today_start_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end_ist = today_start_ist + timedelta(days=1)
 
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        # 1. Total boats owned
-        cur.execute(
-            "SELECT COUNT(*) FROM boats WHERE boat_owner_id = %s AND deleted_at IS NULL",
-            (boat_owner_id,),
-        )
-        total_boats = cur.fetchone()[0] or 0
-
-        # 2. Boats currently in sea (latest movement is departure with no subsequent arrival)
+        # 1 + 2. Total boats and in-sea boats from latest movement per owned boat.
         cur.execute(
             """
-            SELECT COUNT(*) FROM boats b
-            WHERE b.boat_owner_id = %s AND b.deleted_at IS NULL
-              AND EXISTS (
-                SELECT 1 FROM boat_movements m
-                WHERE m.boat_id = b.id
-                  AND m.movement_type = 'departure'
-                  AND NOT EXISTS (
-                    SELECT 1 FROM boat_movements m2
-                    WHERE m2.boat_id = b.id
-                      AND m2.movement_type IN ('arrival', 'partial_arrival')
-                      AND m2.movement_at > m.movement_at
-                  )
-              )
-            """,
-            (boat_owner_id,),
-        )
-        in_sea = cur.fetchone()[0] or 0
-
-        # 3. Arrived boats today with pending bidding request counts
-        cur.execute(
-            """
+            WITH owned_boats AS (
+                SELECT id
+                FROM boats
+                WHERE boat_owner_id = %s
+                  AND deleted_at IS NULL
+            ),
+            latest_movement AS (
+                SELECT DISTINCT ON (m.boat_id)
+                    m.boat_id,
+                    m.movement_type
+                FROM boat_movements m
+                JOIN owned_boats ob ON ob.id = m.boat_id
+                ORDER BY m.boat_id, m.movement_at DESC
+            )
             SELECT
-                m.id AS movement_id,
-                b.id,
-                b.boat_number,
-                b.boat_name,
-                m.movement_at,
-                COALESCE(br_cnt.cnt, 0) AS pending_requests
-            FROM boat_movements m
-            JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
-            LEFT JOIN (
-                SELECT boat_id, COUNT(*) AS cnt
-                FROM bidding_requests
-                WHERE status = 'pending'
-                GROUP BY boat_id
-            ) br_cnt ON br_cnt.boat_id = b.id
-            WHERE b.boat_owner_id = %s
-              AND m.movement_type = 'arrival'
-              AND m.movement_at >= %s
-            ORDER BY m.movement_at DESC
+                (SELECT COUNT(*) FROM owned_boats) AS total_boats,
+                (SELECT COUNT(*) FROM latest_movement WHERE movement_type = 'departure') AS in_sea
             """,
-            (boat_owner_id, today_start_ist),
+            (boat_owner_id,),
+        )
+        total_boats, in_sea = cur.fetchone() or (0, 0)
+
+        # 3. Latest arrived boats today with pending bidding request counts.
+        cur.execute(
+            """
+            WITH owned_boats AS (
+                SELECT id, boat_number, boat_name
+                FROM boats
+                WHERE boat_owner_id = %s
+                  AND deleted_at IS NULL
+            ),
+            latest_arrivals AS (
+                SELECT DISTINCT ON (m.boat_id)
+                    m.id AS movement_id,
+                    m.boat_id,
+                    m.movement_at
+                FROM boat_movements m
+                JOIN owned_boats ob ON ob.id = m.boat_id
+                WHERE m.movement_type = 'arrival'
+                  AND m.movement_at >= %s
+                  AND m.movement_at < %s
+                ORDER BY m.boat_id, m.movement_at DESC
+            ),
+            pending_request_counts AS (
+                SELECT br.boat_id, COUNT(*) AS cnt
+                FROM bidding_requests br
+                JOIN owned_boats ob ON ob.id = br.boat_id
+                WHERE br.status = 'pending'
+                GROUP BY br.boat_id
+            )
+            SELECT
+                la.movement_id,
+                ob.id,
+                ob.boat_number,
+                ob.boat_name,
+                la.movement_at,
+                COALESCE(prc.cnt, 0) AS pending_requests
+            FROM latest_arrivals la
+            JOIN owned_boats ob ON ob.id = la.boat_id
+            LEFT JOIN pending_request_counts prc ON prc.boat_id = ob.id
+            ORDER BY la.movement_at DESC
+            """,
+            (boat_owner_id, today_start_ist, today_end_ist),
         )
         rows = cur.fetchall()
         pending_auctions = []

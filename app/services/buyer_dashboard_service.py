@@ -44,24 +44,25 @@ def get_buyer_dashboard(buyer_id: str) -> Dict[str, Any]:
     try:
         now_ist = datetime.now(_IST)
 
-        # 1. Total bids count
-        cur.execute(
-            "SELECT COUNT(*) FROM bids WHERE bidder_id = %s",
-            (buyer_id,),
-        )
-        total_bids = int(cur.fetchone()[0] or 0)
-
-        # 2. Pending delivery: completed auctions where buyer won
+        # 1 + 2. Total bids and pending delivery counts in one roundtrip.
         cur.execute(
             """
-            SELECT COUNT(*) FROM auctions
-            WHERE winner_id = %s AND status = 'completed'
+            SELECT
+                COALESCE((SELECT COUNT(*) FROM bids WHERE bidder_id = %s), 0) AS total_bids,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM auctions
+                    WHERE winner_id = %s
+                      AND status = 'completed'
+                ), 0) AS pending_delivery
             """,
-            (buyer_id,),
+            (buyer_id, buyer_id),
         )
-        pending_delivery = int(cur.fetchone()[0] or 0)
+        total_bids, pending_delivery = cur.fetchone() or (0, 0)
+        total_bids = int(total_bids or 0)
+        pending_delivery = int(pending_delivery or 0)
 
-        # 3. Update auction statuses (same IST logic as auction_service)
+        # 3. Update only rows whose status should transition now.
         cur.execute(
             f"""
             UPDATE auctions
@@ -71,12 +72,13 @@ def get_buyer_dashboard(buyer_id: str) -> Dict[str, Any]:
                     ELSE status
                 END,
                 updated_at = NOW()
-            WHERE status IN ('scheduled', 'active')
+            WHERE (status = 'scheduled' AND {_NOW_IST_SQL} >= start_time)
+               OR (status = 'active' AND {_NOW_IST_SQL} >= end_time)
             """
         )
         conn.commit()
 
-        # 4. Live auctions: active only, with boat info and buyer's highest bid
+        # 4. Live auctions: active only, with boat info and buyer's highest bid.
         cur.execute(
             """
             SELECT
@@ -86,14 +88,22 @@ def get_buyer_dashboard(buyer_id: str) -> Dict[str, Any]:
                 a.auction_type,
                 a.start_time,
                 b.boat_number,
-                b.boat_name
+                b.boat_name,
+                mb.my_bid
             FROM auctions a
             LEFT JOIN boat_movements m ON m.id = a.movement_id
             LEFT JOIN bidding_requests br ON br.id = a.bidding_request_id
             LEFT JOIN boats b ON b.id = COALESCE(m.boat_id, br.boat_id) AND b.deleted_at IS NULL
+            LEFT JOIN (
+                SELECT auction_id, MAX(amount) AS my_bid
+                FROM bids
+                WHERE bidder_id = %s
+                GROUP BY auction_id
+            ) mb ON mb.auction_id = a.id
             WHERE a.status = 'active'
             ORDER BY a.start_time ASC
-            """
+            """,
+            (buyer_id,),
         )
         auction_rows = cur.fetchall()
 
@@ -106,19 +116,7 @@ def get_buyer_dashboard(buyer_id: str) -> Dict[str, Any]:
             start_time = r[4]
             boat_number = r[5]
             boat_name = r[6] or ""
-
-            # Get buyer's highest bid for this auction
-            cur.execute(
-                """
-                SELECT amount FROM bids
-                WHERE auction_id = %s AND bidder_id = %s
-                ORDER BY amount DESC
-                LIMIT 1
-                """,
-                (auction_id, buyer_id),
-            )
-            bid_row = cur.fetchone()
-            my_bid = float(bid_row[0]) if bid_row else None
+            my_bid = float(r[7]) if r[7] is not None else None
 
             live_auctions.append({
                 "auction_id": auction_id,
