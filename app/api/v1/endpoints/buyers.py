@@ -19,6 +19,7 @@ from app.schemas.user import (
 from app.utils.otp_helpers import send_otp_for_phone
 from app.services import buyer_dashboard_service
 from app.services import buyer_delivery_service
+from app.services import buyer_history_service
 from app.schemas.buyer_dashboard import (
     BuyerDashboardResponse,
     BuyerDashboardUser,
@@ -28,6 +29,12 @@ from app.schemas.buyer_delivery import (
     DeliveryDetail,
     DeliveryListItem,
     DeliveryListResponse,
+)
+from app.schemas.buyer_history import (
+    AuctionHistoryItem,
+    AuctionHistoryResponse,
+    DeliveryHistoryItem,
+    DeliveryHistoryResponse,
 )
 
 
@@ -100,6 +107,28 @@ async def get_buyer_delivery_detail(
             detail="Delivery not found",
         )
     return DeliveryDetail(**detail)
+
+
+@router.get("/history/auctions", response_model=AuctionHistoryResponse)
+async def get_auction_history(
+    current_user: dict = Depends(deps.get_buyer_user),
+):
+    """Auction history: won auctions with Bid Won status."""
+    auctions = buyer_history_service.list_auction_history(buyer_id=current_user["id"])
+    return AuctionHistoryResponse(
+        auctions=[AuctionHistoryItem(**a) for a in auctions],
+    )
+
+
+@router.get("/history/deliveries", response_model=DeliveryHistoryResponse)
+async def get_delivery_history(
+    current_user: dict = Depends(deps.get_buyer_user),
+):
+    """Delivery history: won auctions with Delivery Completed status and delivered quantity."""
+    deliveries = buyer_history_service.list_delivery_history(buyer_id=current_user["id"])
+    return DeliveryHistoryResponse(
+        deliveries=[DeliveryHistoryItem(**d) for d in deliveries],
+    )
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
