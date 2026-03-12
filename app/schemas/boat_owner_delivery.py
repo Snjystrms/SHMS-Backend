@@ -1,14 +1,16 @@
 """Schemas for boat owner delivery (scan QR and record delivery)."""
 
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
 class ScanDeliveryRequest(BaseModel):
     """Request body for scanning QR payload. Accept either qr_payload or auction_id+buyer_id."""
 
-    auction_id: str | None = Field(None, description="Auction ID from QR")
-    buyer_id: str | None = Field(None, description="Buyer ID from QR")
-    qr_payload: str | None = Field(None, description="Raw JSON string from QR: {\"auction_id\":\"...\",\"buyer_id\":\"...\"}")
+    auction_id: Optional[str] = Field(None, description="Auction ID from QR")
+    buyer_id: Optional[str] = Field(None, description="Buyer ID from QR")
+    qr_payload: Optional[str] = Field(None, description="Raw JSON string from QR: {\"auction_id\":\"...\",\"buyer_id\":\"...\"}")
 
 
 class ScanDeliveryResponse(BaseModel):
