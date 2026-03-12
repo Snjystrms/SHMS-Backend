@@ -10,24 +10,27 @@ router = APIRouter()
 
 
 @router.post(
-    "/auctions/{bidding_request_id}",
+    "/auctions",
     response_model=Auction,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_auction(
-    bidding_request_id: str,
     auction_in: AuctionCreate,
     current_user: dict = Depends(deps.get_boat_owner_or_agent_user),
 ):
-    """Create a new auction for fish, linked to an approved bidding request. Boat owner or agent can create."""
+    """
+    Create a new auction for fish.
+    - Boat owner self auction: provide movement_id (latest movement of their boat).
+    - Agent auction: provide bidding_request_id (approved request only).
+    """
     auction, err = auction_service.create_auction(
         caller_id=current_user["id"],
         caller_role=current_user["role"],
         fish_name=auction_in.fish_name,
         initial_price=auction_in.initial_price,
         start_time=auction_in.start_time,
-        end_time=auction_in.end_time,
-        bidding_request_id=bidding_request_id,
+        movement_id=auction_in.movement_id,
+        bidding_request_id=auction_in.bidding_request_id,
         auction_type=auction_in.auction_type,
     )
     if err or not auction:
@@ -69,8 +72,8 @@ async def update_auction(
         seller_id=current_user["id"],
         fish_name=auction_in.fish_name,
         start_time=auction_in.start_time,
-        end_time=auction_in.end_time,
         bidding_request_id=auction_in.bidding_request_id,
+        movement_id=auction_in.movement_id,
         auction_type=auction_in.auction_type,
     )
     if not updated:

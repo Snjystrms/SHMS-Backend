@@ -8,7 +8,7 @@ This guide describes how to integrate the frontend with the **Auction** and **Li
 
 ## Authentication
 
-- **Create auction:** requires **Boat Owner** login. Use the boat owner token in the `Authorization` header.
+- **Create auction:** requires **Boat Owner** or **Agent** login. Use the user's token in the `Authorization` header.
 - **List auctions / Get auction:** no auth required (public).
 - **Place bid:** requires any **logged-in user**. Use the user's JWT in the `Authorization` header.
 
@@ -20,32 +20,54 @@ Authorization: Bearer <access_token>
 
 ## HTTP Endpoints
 
-### 1. Create auction (Boat Owner only)
+### 1. Create auction (Boat Owner or Agent)
 
 **POST** `/api/v1/auctions`
 
-Creates a new fish auction with initial price and schedule.
+Creates a new fish auction with initial price and schedule. Exactly one of `movement_id` or `bidding_request_id` must be provided.
 
-**Headers:** `Authorization: Bearer <boat_owner_token>`  
+- **Boat owner self auction:** Provide `movement_id` (latest movement of their boat from the boat status API).
+- **Agent auction:** Provide `bidding_request_id` (approved bidding request only).
+
+**Headers:** `Authorization: Bearer <boat_owner_or_agent_token>`  
 **Content-Type:** `application/json`
 
-**Request body:**
+**Request body (boat owner self auction):**
 
 ```json
 {
   "fish_name": "Tuna",
   "initial_price": 100.50,
   "start_time": "2026-02-25T10:00:00Z",
-  "end_time": "2026-02-25T18:00:00Z"
+  "auction_type": "open_box",
+  "movement_id": "uuid-of-latest-movement",
+  "bidding_request_id": null
 }
 ```
 
-| Field           | Type     | Required | Description                          |
-|----------------|----------|----------|--------------------------------------|
-| `fish_name`    | string   | Yes      | Name or type of fish                 |
-| `initial_price`| number   | Yes      | Starting price (must be > 0)         |
-| `start_time`   | datetime | Yes      | When the auction becomes active (ISO 8601) |
-| `end_time`     | datetime | Yes      | When the auction ends (must be after start_time) |
+**Request body (agent auction):**
+
+```json
+{
+  "fish_name": "Tuna",
+  "initial_price": 100.50,
+  "start_time": "2026-02-25T10:00:00Z",
+  "auction_type": "open_box",
+  "movement_id": null,
+  "bidding_request_id": "uuid-of-approved-request"
+}
+```
+
+| Field               | Type     | Required | Description                                                |
+|---------------------|----------|----------|------------------------------------------------------------|
+| `fish_name`         | string   | Yes      | Name or type of fish                                       |
+| `initial_price`    | number   | Yes      | Starting price (must be > 0)                                |
+| `start_time`        | datetime | Yes      | When the auction becomes active (ISO 8601)                  |
+| `auction_type`      | string   | No       | `open_box` or `dutch` (default: `open_box`)                 |
+| `movement_id`       | string   | One of   | Boat owner self auction: latest movement id of their boat   |
+| `bidding_request_id`| string   | One of   | Agent auction: approved bidding request id                  |
+
+Note: `end_time` is not required. When omitted, it defaults to `start_time` + 24 hours.
 
 **Success (201):**
 
@@ -59,11 +81,14 @@ Creates a new fish auction with initial price and schedule.
   "start_time": "2026-02-25T10:00:00Z",
   "end_time": "2026-02-25T18:00:00Z",
   "status": "scheduled",
-  "winner_id": null
+  "winner_id": null,
+  "bidding_request_id": null,
+  "movement_id": "uuid",
+  "auction_type": "open_box"
 }
 ```
 
-**Errors:** `400` (invalid data), `401` (unauthorized), `403` (not boat owner).
+**Errors:** `400` (invalid data, missing or invalid movement_id/bidding_request_id), `401` (unauthorized), `403` (not boat owner or agent).
 
 ---
 
@@ -229,7 +254,7 @@ Use `status` and `start_time` / `end_time` to show labels like “Upcoming”, �
 
 | Action           | Method | Endpoint                              | Auth        |
 |-----------------|--------|---------------------------------------|-------------|
-| Create auction  | POST   | `/api/v1/auctions`                    | Boat owner  |
+| Create auction  | POST   | `/api/v1/auctions`                    | Boat owner or Agent |
 | List all auctions | GET  | `/api/v1/auctions/active`             | None        |
 | Get one auction | GET    | `/api/v1/auctions/{id}`              | None        |
 | Place bid       | POST   | `/api/v1/auctions/{id}/bids`          | Any user    |

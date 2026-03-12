@@ -112,7 +112,7 @@ async def agent_verify_otp(req: AgentVerifyOtpRequest):
 async def get_agent_dashboard(
     current_user: dict = Depends(deps.get_agent_user),
 ):
-    data = trip_service.get_agent_dashboard_arrivals()
+    data = trip_service.get_agent_dashboard_arrivals(agent_id=current_user["id"])
     arrived_boats = [AgentArrivedBoatItem(**b) for b in (data.get("arrived_boats") or [])]
     return AgentDashboardResponse(
         user=AgentDashboardUser(

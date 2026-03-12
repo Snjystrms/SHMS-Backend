@@ -1,6 +1,6 @@
 """Schemas for agent dashboard."""
 
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -11,6 +11,7 @@ class AgentArrivedBoatItem(BaseModel):
     boat_name: str
     boat_status: str
     time: str
+    bidding_request_status: Optional[str] = None
 
 
 class AgentDashboardUser(BaseModel):

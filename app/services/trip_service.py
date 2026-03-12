@@ -229,10 +229,11 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
         conn.close()
 
 
-def get_agent_dashboard_arrivals() -> Dict[str, Any]:
+def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
     """
     Agent dashboard: today's arrived boats count + all arrived boats (today, IST).
     "Arrived" is derived from boat_movements.movement_type = 'arrival'.
+    Includes bidding_request_status for each boat (this agent's most recent request).
     """
     ist = ZoneInfo("Asia/Kolkata")
     now_ist = datetime.now(timezone.utc).astimezone(ist)
@@ -259,14 +260,21 @@ def get_agent_dashboard_arrivals() -> Dict[str, Any]:
                 b.id,
                 b.boat_number,
                 b.boat_name,
-                m.movement_at
+                m.movement_at,
+                br.status AS bidding_request_status
             FROM boat_movements m
             JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
+            LEFT JOIN (
+                SELECT DISTINCT ON (boat_id) boat_id, status
+                FROM bidding_requests
+                WHERE agent_id = %s
+                ORDER BY boat_id, created_at DESC
+            ) br ON br.boat_id = b.id
             WHERE m.movement_type = 'arrival'
               AND m.movement_at >= %s
             ORDER BY m.movement_at DESC
             """,
-            (today_start_ist,),
+            (agent_id, today_start_ist),
         )
         rows = cur.fetchall()
         boats = [
@@ -280,6 +288,7 @@ def get_agent_dashboard_arrivals() -> Dict[str, Any]:
                     if r[3]
                     else None
                 ),
+                "bidding_request_status": r[4] if len(r) > 4 and r[4] else None,
             }
             for r in rows
         ]

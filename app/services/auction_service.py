@@ -43,7 +43,31 @@ def _auction_from_row(row) -> Dict[str, Any]:
         "winner_id": str(row[8]) if row[8] else None,
         "bidding_request_id": str(row[9]) if len(row) > 9 and row[9] else None,
         "auction_type": row[10] if len(row) > 10 else "open_box",
+        "movement_id": str(row[11]) if len(row) > 11 and row[11] else None,
     }
+
+
+def _validate_movement_for_boat_owner(
+    cur, movement_id: str, boat_owner_id: str
+) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Validate movement exists, is departure/arrival, and boat belongs to boat_owner.
+    Returns (boat_owner_id as seller_id, None) or (None, error).
+    """
+    cur.execute(
+        """
+        SELECT m.id, m.boat_id, m.movement_type
+        FROM boat_movements m
+        JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
+        WHERE m.id = %s AND b.boat_owner_id = %s
+          AND m.movement_type IN ('departure', 'arrival')
+        """,
+        (movement_id, boat_owner_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None, "Movement not found or boat does not belong to you"
+    return boat_owner_id, None
 
 
 def _validate_bidding_request(
@@ -84,11 +108,17 @@ def create_auction(
     fish_name: str,
     initial_price: float,
     start_time: datetime,
-    end_time: datetime,
-    bidding_request_id: str,
+    end_time: Optional[datetime] = None,
+    movement_id: Optional[str] = None,
+    bidding_request_id: Optional[str] = None,
     auction_type: str = "open_box",
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """Insert new auction into DB. Caller must be boat_owner or agent; seller_id derived from bidding request."""
+    """
+    Insert new auction into DB.
+    - Boat owner self auction: movement_id required, validates boat belongs to owner.
+    - Agent/boat owner from approved request: bidding_request_id required.
+    - end_time is optional; when not provided, defaults to start_time + 24 hours.
+    """
     fish_name = (fish_name or "").strip()
     if not fish_name:
         return None, "fish_name is required"
@@ -96,27 +126,50 @@ def create_auction(
         return None, "initial_price must be > 0"
 
     start_time_ist = _normalize_to_ist(start_time)
-    end_time_ist = _normalize_to_ist(end_time)
-    if end_time_ist <= start_time_ist:
-        return None, "end_time must be after start_time"
+    if end_time is not None:
+        end_time_ist = _normalize_to_ist(end_time)
+        if end_time_ist <= start_time_ist:
+            return None, "end_time must be after start_time"
+    else:
+        end_time_ist = start_time_ist + timedelta(hours=24)
+
+    has_movement = bool(movement_id and str(movement_id).strip())
+    has_request = bool(bidding_request_id and str(bidding_request_id).strip())
+    if has_movement and has_request:
+        return None, "Provide either movement_id or bidding_request_id, not both"
+    if not has_movement and not has_request:
+        return None, "Provide either movement_id or bidding_request_id"
 
     auction_id = str(uuid.uuid4())
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        seller_id, err = _validate_bidding_request(
-            cur, bidding_request_id, caller_id, caller_role
-        )
-        if err:
-            return None, err
+        if has_movement:
+            if caller_role != "boat_owner":
+                return None, "Only boat owner can create self auction with movement_id"
+            seller_id, err = _validate_movement_for_boat_owner(
+                cur, movement_id.strip(), caller_id
+            )
+            if err:
+                return None, err
+            store_movement_id = movement_id.strip()
+            store_bidding_request_id = None
+        else:
+            seller_id, err = _validate_bidding_request(
+                cur, bidding_request_id.strip(), caller_id, caller_role
+            )
+            if err:
+                return None, err
+            store_movement_id = None
+            store_bidding_request_id = bidding_request_id.strip()
 
         cur.execute(
             """
             INSERT INTO auctions (
                 id, seller_id, fish_name, initial_price, current_price,
-                start_time, end_time, status, bidding_request_id, auction_type
+                start_time, end_time, status, bidding_request_id, auction_type, movement_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled', %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled', %s, %s, %s)
             """,
             (
                 auction_id,
@@ -126,8 +179,9 @@ def create_auction(
                 initial_price,
                 start_time_ist,
                 end_time_ist,
-                bidding_request_id,
+                store_bidding_request_id,
                 auction_type,
+                store_movement_id,
             ),
         )
         conn.commit()
@@ -141,7 +195,8 @@ def create_auction(
             "end_time": end_time_ist,
             "status": "scheduled",
             "winner_id": None,
-            "bidding_request_id": bidding_request_id,
+            "bidding_request_id": store_bidding_request_id,
+            "movement_id": store_movement_id,
             "auction_type": auction_type,
         }, None
     except Exception as e:
@@ -177,7 +232,7 @@ def get_auction_by_id(auction_id: str) -> Optional[Dict[str, Any]]:
         cur.execute(
             """
             SELECT id, seller_id, fish_name, initial_price, current_price,
-                   start_time, end_time, status, winner_id, bidding_request_id, auction_type
+                   start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             WHERE id = %s
             """,
@@ -216,7 +271,7 @@ def list_auctions() -> List[Dict[str, Any]]:
         cur.execute(
             """
             SELECT id, seller_id, fish_name, initial_price, current_price,
-                   start_time, end_time, status, winner_id, bidding_request_id, auction_type
+                   start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             ORDER BY created_at DESC
             """,
@@ -245,8 +300,8 @@ def update_auction(
     seller_id: str,
     fish_name: Optional[str],
     start_time: Optional[datetime],
-    end_time: Optional[datetime],
     bidding_request_id: Optional[str] = None,
+    movement_id: Optional[str] = None,
     auction_type: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Update editable fields of an auction owned by seller_id."""
@@ -257,7 +312,7 @@ def update_auction(
         cur.execute(
             """
             SELECT id, seller_id, fish_name, initial_price, current_price,
-                   start_time, end_time, status, winner_id, bidding_request_id, auction_type
+                   start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             WHERE id = %s AND seller_id = %s
             """,
@@ -279,9 +334,8 @@ def update_auction(
         existing_start = auction["start_time"]
         existing_end = auction["end_time"]
         new_start_time = _normalize_to_ist(start_time) if start_time is not None else _normalize_to_ist(existing_start)
-        new_end_time = _normalize_to_ist(end_time) if end_time is not None else _normalize_to_ist(existing_end)
 
-        if new_end_time <= new_start_time:
+        if existing_end and new_start_time >= _normalize_to_ist(existing_end):
             return None
 
         if bidding_request_id is not None:
@@ -291,27 +345,33 @@ def update_auction(
             if err:
                 return None
 
+        if movement_id is not None:
+            _, err = _validate_movement_for_boat_owner(cur, movement_id, seller_id)
+            if err:
+                return None
+
         new_bidding_request_id = bidding_request_id if bidding_request_id is not None else auction.get("bidding_request_id")
+        new_movement_id = movement_id if movement_id is not None else auction.get("movement_id")
         new_auction_type = auction_type if auction_type is not None else auction.get("auction_type", "open_box")
         cur.execute(
             """
             UPDATE auctions
             SET fish_name = %s,
                 start_time = %s,
-                end_time = %s,
                 bidding_request_id = %s,
+                movement_id = %s,
                 auction_type = %s,
                 updated_at = NOW()
             WHERE id = %s
             """,
-            (new_fish_name, new_start_time, new_end_time, new_bidding_request_id, new_auction_type, auction_id),
+            (new_fish_name, new_start_time, new_bidding_request_id, new_movement_id, new_auction_type, auction_id),
         )
         conn.commit()
 
         auction["fish_name"] = new_fish_name
         auction["start_time"] = new_start_time
-        auction["end_time"] = new_end_time
         auction["bidding_request_id"] = new_bidding_request_id
+        auction["movement_id"] = new_movement_id
         auction["auction_type"] = new_auction_type
         return auction
     except Exception as e:
@@ -360,7 +420,7 @@ def end_auction(auction_id: str, seller_id: str) -> Optional[Dict[str, Any]]:
         cur.execute(
             """
             SELECT id, seller_id, fish_name, initial_price, current_price,
-                   start_time, end_time, status, winner_id, bidding_request_id, auction_type
+                   start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             WHERE id = %s AND seller_id = %s
             """,
@@ -468,7 +528,7 @@ def create_bid(auction_id: str, bidder_id: str, amount: float) -> Tuple[Optional
         cur.execute(
             """
             SELECT id, seller_id, fish_name, initial_price, current_price,
-                   start_time, end_time, status, winner_id, bidding_request_id, auction_type
+                   start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             WHERE id = %s
             FOR UPDATE
