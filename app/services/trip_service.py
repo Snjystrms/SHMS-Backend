@@ -338,6 +338,7 @@ def get_boat_owner_dashboard(boat_owner_id: str) -> Dict[str, Any]:
         cur.execute(
             """
             SELECT
+                m.id AS movement_id,
                 b.id,
                 b.boat_number,
                 b.boat_name,
@@ -361,17 +362,18 @@ def get_boat_owner_dashboard(boat_owner_id: str) -> Dict[str, Any]:
         rows = cur.fetchall()
         pending_auctions = []
         for r in rows:
-            arrival_dt = r[3]
+            arrival_dt = r[4]
             if arrival_dt and arrival_dt.tzinfo is None:
                 arrival_dt = arrival_dt.replace(tzinfo=timezone.utc)
             arrival_ist = arrival_dt.astimezone(ist) if arrival_dt else None
             pending_auctions.append({
-                "boat_id": str(r[0]),
-                "boat_number": r[1] or "",
-                "boat_name": r[2] or "",
+                "boat_id": str(r[1]),
+                "boat_number": r[2] or "",
+                "boat_name": r[3] or "",
                 "status": "Arrived",
                 "arrival_time": arrival_ist.strftime("%I:%M %p") if arrival_ist else "",
-                "pending_bidding_requests_count": int(r[4]),
+                "pending_bidding_requests_count": int(r[5]),
+                "latest_movement_id": str(r[0]) if r[0] else None,
             })
 
         return {

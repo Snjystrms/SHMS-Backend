@@ -23,6 +23,7 @@ class PendingAuctionBoatItem(BaseModel):
     status: str
     arrival_time: str
     pending_bidding_requests_count: int = 0
+    latest_movement_id: str | None = None
 
 
 class BoatOwnerDashboardResponse(BaseModel):
