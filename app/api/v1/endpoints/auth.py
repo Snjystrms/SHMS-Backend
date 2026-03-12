@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 from typing import Callable, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Form
@@ -84,24 +85,29 @@ class LoginRequestForm:
 async def login(form_data: LoginRequestForm = Depends()):
     """Login endpoint - accepts mobile number only."""
     user = crud_user.get_user_by_identifier(form_data.mobile_number)
-    print(f"User: {user}")
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect mobile number",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    if not security.verify_password(form_data.password, user["password"]):
+
+    # Run bcrypt in thread pool to avoid blocking event loop
+    verified = await asyncio.to_thread(
+        security.verify_password, form_data.password, user["password"]
+    )
+    if not verified:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     # Optional: Automatically hash plain text password on first login
     if not user["password"].startswith("$2b$") and not user["password"].startswith("$2a$"):
-        hashed = security.get_password_hash(form_data.password)
+        hashed = await asyncio.to_thread(
+            security.get_password_hash, form_data.password
+        )
         crud_user.update_user_password(user["id"], hashed)
 
     return _token_response(user)

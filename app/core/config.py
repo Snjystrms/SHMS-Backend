@@ -20,7 +20,10 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "4d9c490cc2e8b264177708569502a9db4e1e86a0df6839a8"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
-    
+
+    # Bcrypt: 10 rounds ~100ms vs 12 rounds ~350ms per verify. Still secure.
+    BCRYPT_ROUNDS: int = 10
+
     # DATABASE
     DB_HOST: str = "localhost"
     DB_PORT: str = "5432"
