@@ -1,9 +1,17 @@
 """Trip status service: boat movement tracking (departure, arrival, partial arrival)."""
 import uuid
 from datetime import datetime, timezone, timedelta
+from threading import Lock
 from typing import Optional, Dict, Any, Tuple, List
 from zoneinfo import ZoneInfo
 from app.db.session import get_db_connection
+
+_DASHBOARD_COUNTS_CACHE_TTL_SECONDS = 10
+_dashboard_counts_cache_lock = Lock()
+_dashboard_counts_cache: Dict[str, Any] = {
+    "expires_at": datetime.min.replace(tzinfo=timezone.utc),
+    "data": None,
+}
 
 
 def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
@@ -171,59 +179,70 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
     crew registrations (new crew created today), crew verifications (crew scanned at departure today).
     """
     now = datetime.now(timezone.utc)
+    with _dashboard_counts_cache_lock:
+        cached = _dashboard_counts_cache["data"]
+        expires_at = _dashboard_counts_cache["expires_at"]
+        if cached and now < expires_at:
+            return dict(cached)
+
     start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
 
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        # Departures today
         cur.execute(
             """
-            SELECT COUNT(*) FROM boat_movements
-            WHERE movement_type = 'departure' AND movement_at >= %s
+            SELECT
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM boat_movements
+                    WHERE movement_type = 'departure'
+                      AND movement_at >= %s
+                      AND movement_at < %s
+                ), 0) AS departures,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM boat_movements
+                    WHERE movement_type = 'arrival'
+                      AND movement_at >= %s
+                      AND movement_at < %s
+                ), 0) AS arrivals,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM crew_members
+                    WHERE created_at >= %s
+                      AND created_at < %s
+                      AND deleted_at IS NULL
+                ), 0) AS crew_registration,
+                COALESCE((
+                    SELECT COUNT(*)
+                    FROM boat_movement_crew bmc
+                    JOIN boat_movements m
+                      ON m.id = bmc.movement_id
+                     AND m.movement_type = 'departure'
+                    WHERE m.movement_at >= %s
+                      AND m.movement_at < %s
+                ), 0) AS crew_verification
             """,
-            (start,),
+            (start, end, start, end, start, end, start, end),
         )
-        departures = cur.fetchone()[0] or 0
+        row = cur.fetchone() or (0, 0, 0, 0)
+        departures, arrivals, crew_registration, crew_verification = row
 
-        # Arrivals today (full arrival only; partial_arrival is separate if needed)
-        cur.execute(
-            """
-            SELECT COUNT(*) FROM boat_movements
-            WHERE movement_type = 'arrival' AND movement_at >= %s
-            """,
-            (start,),
-        )
-        arrivals = cur.fetchone()[0] or 0
-
-        # Crew registrations today (new crew_members created today)
-        cur.execute(
-            """
-            SELECT COUNT(*) FROM crew_members
-            WHERE created_at >= %s AND deleted_at IS NULL
-            """,
-            (start,),
-        )
-        crew_registration = cur.fetchone()[0] or 0
-
-        # Crew verifications today (crew attached to departures that happened today)
-        cur.execute(
-            """
-            SELECT COUNT(*) FROM boat_movement_crew bmc
-            JOIN boat_movements m ON m.id = bmc.movement_id AND m.movement_type = 'departure'
-            WHERE m.movement_at >= %s
-            """,
-            (start,),
-        )
-        crew_verification = cur.fetchone()[0] or 0
-
-        return {
+        result = {
             "departures": departures,
             "arrivals": arrivals,
             "crew_registration": crew_registration,
             "crew_verification": crew_verification,
             "updated_at": now,
         }
+        with _dashboard_counts_cache_lock:
+            _dashboard_counts_cache["data"] = result
+            _dashboard_counts_cache["expires_at"] = now + timedelta(
+                seconds=_DASHBOARD_COUNTS_CACHE_TTL_SECONDS
+            )
+        return result
     finally:
         cur.close()
         conn.close()
