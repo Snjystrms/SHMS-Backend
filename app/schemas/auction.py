@@ -74,6 +74,8 @@ class BidCreate(BaseModel):
     """Payload when a user places a bid on an auction."""
 
     amount: float = Field(..., gt=0, description="Bid amount (must be higher than current price)")
+    quantity: float = Field(..., gt=0, description="Quantity being bid for")
+
 
 
 class Bid(BaseModel):
@@ -83,6 +85,7 @@ class Bid(BaseModel):
     auction_id: str
     bidder_id: str
     amount: float
+    quantity: float
     created_at: datetime
     bidder_name: Optional[str] = None
 

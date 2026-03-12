@@ -130,6 +130,7 @@ async def place_bid(
         auction_id=auction_id,
         bidder_id=current_user["id"],
         amount=bid_in.amount,
+        quantity=bid_in.quantity,
     )
     if err:
         raise HTTPException(

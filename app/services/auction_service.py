@@ -487,6 +487,7 @@ def list_bids_for_auction(auction_id: str) -> List[Dict[str, Any]]:
                 b.auction_id,
                 b.bidder_id,
                 b.amount,
+                b.quantity,
                 b.created_at,
                 u.name AS bidder_name
             FROM bids AS b
@@ -503,8 +504,9 @@ def list_bids_for_auction(auction_id: str) -> List[Dict[str, Any]]:
                 "auction_id": str(r[1]),
                 "bidder_id": str(r[2]),
                 "amount": float(r[3]),
-                "created_at": r[4],
-                "bidder_name": r[5],
+                "quantity": float(r[4]) if r[4] is not None else 1.0,
+                "created_at": r[5],
+                "bidder_name": r[6],
             }
             for r in rows
         ]
@@ -516,7 +518,9 @@ def list_bids_for_auction(auction_id: str) -> List[Dict[str, Any]]:
         conn.close()
 
 
-def create_bid(auction_id: str, bidder_id: str, amount: float) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def create_bid(
+    auction_id: str, bidder_id: str, amount: float, quantity: float
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
     Create a bid and update auction.current_price in a transaction.
     Returns (bid_dict, None) on success, (None, error_message) on failure.
@@ -567,10 +571,10 @@ def create_bid(auction_id: str, bidder_id: str, amount: float) -> Tuple[Optional
 
         cur.execute(
             """
-            INSERT INTO bids (id, auction_id, bidder_id, amount, created_at)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO bids (id, auction_id, bidder_id, amount, quantity, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (bid_id, auction_id, bidder_id, amount, created_at),
+            (bid_id, auction_id, bidder_id, amount, quantity, created_at),
         )
         cur.execute(
             """
@@ -601,6 +605,7 @@ def create_bid(auction_id: str, bidder_id: str, amount: float) -> Tuple[Optional
             "auction_id": auction_id,
             "bidder_id": bidder_id,
             "amount": amount,
+            "quantity": quantity,
             "created_at": created_at,
             "bidder_name": bidder_name,
         }, None
@@ -652,6 +657,7 @@ async def broadcast_bid(auction_id: str, bid: Dict[str, Any]) -> None:
         "type": "new_bid",
         "auction_id": auction_id,
         "amount": bid["amount"],
+        "quantity": bid.get("quantity"),
         "bidder_id": bid["bidder_id"],
         "bidder_name": bid.get("bidder_name"),
         "created_at": bid.get("created_at"),

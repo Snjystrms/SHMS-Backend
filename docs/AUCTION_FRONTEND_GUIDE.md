@@ -143,13 +143,15 @@ Places a bid on an auction. The bid is saved and **broadcast to all clients** wa
 
 ```json
 {
-  "amount": 120.00
+  "amount": 120.00,
+  "quantity": 50
 }
 ```
 
-| Field   | Type   | Required | Description                                  |
-|--------|--------|----------|----------------------------------------------|
-| `amount` | number | Yes    | Bid amount; must be **greater than** current price |
+| Field     | Type   | Required | Description                                  |
+|----------|--------|----------|----------------------------------------------|
+| `amount` | number | Yes      | Bid amount; must be **greater than** current price |
+| `quantity` | number | Yes    | Quantity being bid for (must be > 0)         |
 
 **Success (200):**
 
@@ -159,6 +161,7 @@ Places a bid on an auction. The bid is saved and **broadcast to all clients** wa
   "auction_id": "uuid",
   "bidder_id": "uuid",
   "amount": 120.0,
+  "quantity": 50,
   "created_at": "2026-02-25T12:30:00Z"
 }
 ```
