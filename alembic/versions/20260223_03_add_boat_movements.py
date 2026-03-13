@@ -18,7 +18,7 @@ def upgrade() -> None:
         CREATE TABLE IF NOT EXISTS boat_movements (
             id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             boat_id                 UUID NOT NULL REFERENCES boats(id) ON DELETE CASCADE,
-            movement_type           TEXT NOT NULL CHECK (movement_type IN ('departure', 'arrival', 'partial_arrival')),
+            movement_type           TEXT NOT NULL CHECK (movement_type IN ('departure', 'arrival', 'partial_arrival', 'temporary_departure', 'temporary_arrival')),
             movement_at             TIMESTAMPTZ NOT NULL,
             port_name               TEXT,
             crew_count              INTEGER,

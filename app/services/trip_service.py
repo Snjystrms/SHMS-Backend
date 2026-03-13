@@ -40,7 +40,7 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
 
         cur.execute(
             """
-            SELECT id, movement_type, movement_at, port_name, crew_count, image_url
+            SELECT id, movement_type, movement_at, port_name, crew_count, image_url, departure_at
             FROM boat_movements
             WHERE boat_id = %s
             ORDER BY movement_at DESC
@@ -55,15 +55,16 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
                 "boat_id": str(boat_id_val),
                 "boat_number": boat_number or "",
                 "trip_status": "docked",
+                "movement_type": None,
                 "departure_details": None,
                 "has_open_departure": False,
                 "last_movement_at": None,
                 "latest_movement_id": None,
             }
 
-        latest_id, latest_type, latest_at, port_name, crew_count, image_url = movements[0]
+        latest_id, latest_type, latest_at, port_name, crew_count, image_url, departure_at = movements[0]
 
-        if latest_type == "departure":
+        if latest_type in ("departure", "temporary_departure"):
             trip_status = "sailing"
             departure_details = {
                 "departure_at": latest_at,
@@ -74,6 +75,18 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
                 "image_url": image_url,
             }
             has_open = True
+        elif latest_type == "temporary_arrival":
+            trip_status = "temporary_arrived"
+            dep_at = departure_at or latest_at
+            departure_details = {
+                "departure_at": dep_at,
+                "from_port": port_name or harbor_name or "Unknown",
+                "vessel_type": boat_type,
+                "crew_count": crew_count,
+                "status_label": "Sailing",
+                "image_url": image_url,
+            }
+            has_open = False
         elif latest_type == "arrival":
             trip_status = "arrived"
             departure_details = None
@@ -91,6 +104,7 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
             "boat_id": str(boat_id_val),
             "boat_number": boat_number or "",
             "trip_status": trip_status,
+            "movement_type": latest_type,
             "departure_details": departure_details,
             "has_open_departure": has_open,
             "last_movement_at": latest_at,
@@ -129,6 +143,14 @@ def get_movement_history(
     else:
         raise ValueError("Invalid date_filter")
 
+    # Map filter to DB values (include temporary types)
+    type_values = {
+        "departure": ("departure", "temporary_departure"),
+        "arrival": ("arrival", "temporary_arrival"),
+        "partial_arrival": ("partial_arrival",),
+    }
+    db_types = type_values.get(movement_type, (movement_type,))
+
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -146,12 +168,12 @@ def get_movement_history(
                 m.image_url
             FROM boat_movements m
             JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
-            WHERE m.movement_type = %s
+            WHERE m.movement_type = ANY(%s)
               AND m.movement_at >= %s
             ORDER BY m.movement_at DESC
             LIMIT 200
             """,
-            (movement_type, start),
+            (list(db_types), start),
         )
         rows = cur.fetchall()
         return [
@@ -197,14 +219,14 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
                 COALESCE((
                     SELECT COUNT(*)
                     FROM boat_movements
-                    WHERE movement_type = 'departure'
+                    WHERE movement_type IN ('departure', 'temporary_departure')
                       AND movement_at >= %s
                       AND movement_at < %s
                 ), 0) AS departures,
                 COALESCE((
                     SELECT COUNT(*)
                     FROM boat_movements
-                    WHERE movement_type = 'arrival'
+                    WHERE movement_type IN ('arrival', 'temporary_arrival')
                       AND movement_at >= %s
                       AND movement_at < %s
                 ), 0) AS arrivals,
@@ -220,7 +242,7 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
                     FROM boat_movement_crew bmc
                     JOIN boat_movements m
                       ON m.id = bmc.movement_id
-                     AND m.movement_type = 'departure'
+                     AND m.movement_type IN ('departure', 'temporary_departure')
                     WHERE m.movement_at >= %s
                       AND m.movement_at < %s
                 ), 0) AS crew_verification
@@ -279,7 +301,7 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
                 WHERE agent_id = %s
                 ORDER BY boat_id, created_at DESC
             ) br ON br.boat_id = b.id
-            WHERE m.movement_type = 'arrival'
+            WHERE m.movement_type IN ('arrival', 'temporary_arrival')
               AND m.movement_at >= %s
               AND m.movement_at < %s
             ORDER BY m.movement_at DESC
@@ -346,7 +368,7 @@ def get_boat_owner_dashboard(boat_owner_id: str) -> Dict[str, Any]:
             )
             SELECT
                 (SELECT COUNT(*) FROM owned_boats) AS total_boats,
-                (SELECT COUNT(*) FROM latest_movement WHERE movement_type = 'departure') AS in_sea
+                (SELECT COUNT(*) FROM latest_movement WHERE movement_type IN ('departure', 'temporary_departure')) AS in_sea
             """,
             (boat_owner_id,),
         )
@@ -368,7 +390,7 @@ def get_boat_owner_dashboard(boat_owner_id: str) -> Dict[str, Any]:
                     m.movement_at
                 FROM boat_movements m
                 JOIN owned_boats ob ON ob.id = m.boat_id
-                WHERE m.movement_type = 'arrival'
+                WHERE m.movement_type IN ('arrival', 'temporary_arrival')
                   AND m.movement_at >= %s
                   AND m.movement_at < %s
                 ORDER BY m.boat_id, m.movement_at DESC
@@ -458,7 +480,7 @@ def get_departure_movement_by_id(movement_id: str, boat_id: Optional[str] = None
                 """
                 SELECT id, boat_id, movement_type, movement_at, port_name, crew_count, image_url
                 FROM boat_movements
-                WHERE id = %s AND boat_id = %s AND movement_type = 'departure'
+                WHERE id = %s AND boat_id = %s AND movement_type IN ('departure', 'temporary_departure')
                 """,
                 (movement_id, boat_id),
             )
@@ -467,7 +489,7 @@ def get_departure_movement_by_id(movement_id: str, boat_id: Optional[str] = None
                 """
                 SELECT id, boat_id, movement_type, movement_at, port_name, crew_count, image_url
                 FROM boat_movements
-                WHERE id = %s AND movement_type = 'departure'
+                WHERE id = %s AND movement_type IN ('departure', 'temporary_departure')
                 """,
                 (movement_id,),
             )
@@ -502,7 +524,7 @@ def get_trip_movement_by_id(movement_id: str, boat_id: Optional[str] = None) -> 
                 """
                 SELECT id, boat_id, movement_type, movement_at, port_name, crew_count, image_url
                 FROM boat_movements
-                WHERE id = %s AND boat_id = %s AND movement_type IN ('departure', 'arrival')
+                WHERE id = %s AND boat_id = %s AND movement_type IN ('departure', 'temporary_departure', 'arrival', 'temporary_arrival')
                 """,
                 (movement_id, boat_id),
             )
@@ -511,7 +533,7 @@ def get_trip_movement_by_id(movement_id: str, boat_id: Optional[str] = None) -> 
                 """
                 SELECT id, boat_id, movement_type, movement_at, port_name, crew_count, image_url
                 FROM boat_movements
-                WHERE id = %s AND movement_type IN ('departure', 'arrival')
+                WHERE id = %s AND movement_type IN ('departure', 'temporary_departure', 'arrival', 'temporary_arrival')
                 """,
                 (movement_id,),
             )
@@ -551,7 +573,7 @@ def get_movement_with_departure_arrival(
             FROM boat_movements m
             JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
             WHERE m.id = %s AND m.boat_id = %s
-              AND m.movement_type IN ('departure', 'arrival', 'partial_arrival')
+              AND m.movement_type IN ('departure', 'temporary_departure', 'arrival', 'temporary_arrival', 'partial_arrival')
             """,
             (movement_id, boat_id),
         )
@@ -677,10 +699,10 @@ def create_boat_movement(
                 UPDATE boat_movements
                 SET departure_at = COALESCE(departure_at, movement_at),
                     movement_at = %s,
-                    movement_type = 'arrival',
+                    movement_type = 'temporary_arrival',
                     image_url = COALESCE(%s, image_url),
                     updated_at = NOW()
-                WHERE id = %s AND boat_id = %s AND movement_type = 'departure'
+                WHERE id = %s AND boat_id = %s AND movement_type IN ('departure', 'temporary_departure')
                 RETURNING id, boat_id, movement_type, movement_at,
                           partial_arrival_reason, partial_arrival_details, image_url
                 """,
@@ -706,6 +728,8 @@ def create_boat_movement(
         movement_at_val = movement_at or datetime.now(timezone.utc)
         movement_id = str(uuid.uuid4())
 
+        # Store as temporary_departure; becomes 'departure' when inventory is added
+        stored_type = "temporary_departure" if movement_type == "departure" else movement_type
         cur.execute(
             """
             INSERT INTO boat_movements (
@@ -716,7 +740,7 @@ def create_boat_movement(
             (
                 movement_id,
                 boat_id,
-                movement_type,
+                stored_type,
                 movement_at_val,
                 logged_by_user_id,
                 partial_arrival_reason,
@@ -729,7 +753,7 @@ def create_boat_movement(
         return {
             "id": movement_id,
             "boat_id": boat_id,
-            "movement_type": movement_type,
+            "movement_type": stored_type,
             "movement_at": movement_at_val,
             "partial_arrival_reason": partial_arrival_reason,
             "partial_arrival_details": partial_arrival_details,
@@ -758,7 +782,7 @@ def _get_departure_movement_for_boat(
         """
         SELECT id, boat_id
         FROM boat_movements
-        WHERE id = %s AND boat_id = %s AND movement_type = 'departure'
+        WHERE id = %s AND boat_id = %s AND movement_type IN ('departure', 'temporary_departure')
         """,
         (movement_id, boat_id),
     )
@@ -776,7 +800,7 @@ def _get_departure_movement_by_id(cur, movement_id: str) -> Optional[Tuple[str, 
         """
         SELECT id, boat_id
         FROM boat_movements
-        WHERE id = %s AND movement_type = 'departure'
+        WHERE id = %s AND movement_type IN ('departure', 'temporary_departure')
         """,
         (movement_id,),
     )
@@ -902,6 +926,16 @@ def set_boat_movement_inventory(
             ),
         )
 
+        # Mark departure as complete when inventory is added
+        cur.execute(
+            """
+            UPDATE boat_movements
+            SET movement_type = 'departure'
+            WHERE id = %s AND movement_type = 'temporary_departure'
+            """,
+            (movement_id,),
+        )
+
         conn.commit()
 
         return {
@@ -917,6 +951,34 @@ def set_boat_movement_inventory(
         conn.rollback()
         print(f"Error setting boat movement inventory: {e}")
         return None, str(e)
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_movement_to_complete_arrival(movement_id: str) -> bool:
+    """
+    Mark a temporary_arrival movement as complete (arrival) after arrival inventory check.
+    Returns True if updated, False if not found or already complete.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE boat_movements
+            SET movement_type = 'arrival', updated_at = NOW()
+            WHERE id = %s AND movement_type = 'temporary_arrival'
+            """,
+            (movement_id,),
+        )
+        updated = cur.rowcount > 0
+        conn.commit()
+        return updated
+    except Exception as e:
+        conn.rollback()
+        print(f"Error updating movement to complete arrival: {e}")
+        return False
     finally:
         cur.close()
         conn.close()
@@ -975,7 +1037,7 @@ def get_scanned_crew_history(
             JOIN boat_movement_crew bmc ON bmc.movement_id = m.id
             JOIN crew_members cm ON cm.id = bmc.crew_member_id AND cm.deleted_at IS NULL
             JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
-            WHERE m.movement_type = 'departure'
+            WHERE m.movement_type IN ('departure', 'temporary_departure')
               AND m.movement_at >= %s
               {where_extra}
             ORDER BY m.movement_at DESC

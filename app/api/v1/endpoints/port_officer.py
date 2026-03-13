@@ -704,6 +704,9 @@ async def arrival_inventory_check(
 
     image_url = resolve_image_url(body.image_url, str(request.base_url)) if body.image_url else None
 
+    # Mark temporary_arrival as complete (arrival) after inventory check
+    trip_service.update_movement_to_complete_arrival(movement_id)
+
     return ArrivalInventoryCheckResponse(
         movement_id=movement_id,
         boat_id=boat_id,

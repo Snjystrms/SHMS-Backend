@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, Literal, List, Dict
 from pydantic import BaseModel, model_validator
 
-TripStatusType = Literal["docked", "sailing", "arrived", "partial_arrival"]
+TripStatusType = Literal["docked", "sailing", "arrived", "temporary_arrived", "partial_arrival"]
 
 PartialArrivalReason = Literal[
     "system_error",
@@ -31,6 +31,7 @@ class BoatTripStatusResponse(BaseModel):
     boat_id: str
     boat_number: str
     trip_status: TripStatusType
+    movement_type: Optional[str] = None  # Actual DB value: departure, temporary_departure, arrival, temporary_arrival, partial_arrival
     departure_details: Optional[DepartureDetails] = None
     has_open_departure: bool = False
     open_departure_movement_id: Optional[str] = None
@@ -68,7 +69,7 @@ class BoatMovementResponse(BaseModel):
 
     id: str
     boat_id: str
-    movement_type: Literal["departure", "arrival", "partial_arrival"]
+    movement_type: Literal["departure", "arrival", "partial_arrival", "temporary_departure", "temporary_arrival"]
     movement_at: datetime
     partial_arrival_reason: Optional[str] = None
     partial_arrival_details: Optional[str] = None
@@ -182,10 +183,10 @@ InventoryLossReason = Literal["consumed", "lost_at_sea", "left_at_port", "theft"
 class ArrivalInventoryItemDiscrepancy(BaseModel):
     """One inventory line with departure vs arrival and optional reason for loss."""
 
-    item_name: str  # e.g. "diesel_liters", "fishing_net_count"
-    departure_quantity: Optional[float] = None  # int for counts
+    item_name: str
+    departure_quantity: Optional[float] = None
     arrival_quantity: Optional[float] = None
-    status: Literal["matched", "missing"]  # missing = departure > arrival
+    status: Literal["matched", "missing"]
     reason_for_loss: Optional[InventoryLossReason] = None
     additional_details: Optional[str] = None
 
