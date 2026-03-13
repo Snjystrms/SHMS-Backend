@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import api_router
+from app.api.v1.endpoints import auction_ws
 from app.core.config import settings
 from app.utils import get_local_ip
 from app.core.exceptions import (
@@ -55,6 +56,8 @@ async def startup_event():
         print(f"💡 Share 'http://{local_ip}:8000' with your colleagues.")
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+# Also expose WebSockets without the `/api/v1` prefix for convenience (mobile/Expo dev).
+app.include_router(auction_ws.router)
 
 @app.get("/health")
 def health_check():

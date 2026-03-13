@@ -182,6 +182,9 @@ ws://<host>/api/v1/ws/auctions/{auction_id}
 
 Example: `ws://localhost:8000/api/v1/ws/auctions/abc-123-uuid`
 
+- Alternate (DEV convenience, no `/api/v1` prefix):
+  `ws://<host>/ws/auctions/{auction_id}`
+
 - Replace `http` with `ws` (and `https` with `wss` in production).
 - No query params or auth are required for the current implementation.
 
@@ -189,9 +192,10 @@ Example: `ws://localhost:8000/api/v1/ws/auctions/abc-123-uuid`
 
 1. User opens the auction detail page → frontend opens a WebSocket to the URL above.
 2. Keep the connection open while the user is on the page.
-3. When **any** user places a bid on this auction, the server sends a JSON message to all connected clients.
-4. On message received, update the UI (current price, last bidder, bid history, etc.).
-5. On leaving the page, close the WebSocket.
+3. On connect, the server sends an `initial_state` snapshot (auction + current bids).
+4. When **any** user places a bid on this auction, the server sends a JSON `new_bid` message to all connected clients.
+5. On message received, update the UI (current price, last bidder, bid history, etc.).
+6. On leaving the page, close the WebSocket.
 
 ### Message from server (when someone bids)
 

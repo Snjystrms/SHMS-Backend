@@ -633,13 +633,10 @@ async def broadcast_bid(auction_id: str, bid: Dict[str, Any]) -> None:
         "status": "<scheduled|active|completed|cancelled>"
     }
     """
-    # Send full state on each bid so all clients can render complete bid history.
-    auction = get_auction_by_id(auction_id)
-    bids = list_bids_for_auction(auction_id)
-
     # Enrich latest bid with bidder_name (joined in list_bids_for_auction)
     bidder_name = None
     try:
+        bids = list_bids_for_auction(auction_id)
         matched = next((b for b in bids if b.get("id") == bid.get("id")), None)
         if matched:
             bidder_name = matched.get("bidder_name")
@@ -647,12 +644,6 @@ async def broadcast_bid(auction_id: str, bid: Dict[str, Any]) -> None:
         bidder_name = None
     if bidder_name is not None:
         bid["bidder_name"] = bidder_name
-    full_update = {
-        "type": "update",
-        "auction": auction,
-        "bids": bids,
-        "latest_bid": bid,
-    }
     new_bid_message = {
         "type": "new_bid",
         "auction_id": auction_id,
@@ -670,8 +661,7 @@ async def broadcast_bid(auction_id: str, bid: Dict[str, Any]) -> None:
         if ws.client_state != WebSocketState.CONNECTED:
             continue
         try:
-            await ws.send_json(jsonable_encoder(full_update))
-            # Keep backward compatibility for clients listening only to "new_bid".
+            # Send a single message per bid to avoid duplicate UI updates.
             await ws.send_json(jsonable_encoder(new_bid_message))
         except Exception as e:
             print(f"Error broadcasting bid to websocket client: {e}")

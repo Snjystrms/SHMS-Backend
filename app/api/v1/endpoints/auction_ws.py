@@ -21,13 +21,16 @@ async def auction_live(websocket: WebSocket, auction_id: str):
     - On connect, sends an initial snapshot of the auction and its bids.
     - Keeps the connection open, ignoring client messages except for basic pings.
     """
-    # Validate auction existence before accepting
+    await websocket.accept()
+
+    # Validate auction existence after accepting so clients get a proper WS close code.
     auction = auction_service.get_auction_by_id(auction_id)
     if not auction:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        try:
+            await websocket.send_json({"type": "error", "detail": "Auction not found"})
+        finally:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
-
-    await websocket.accept()
 
     connections = active_auction_connections.setdefault(auction_id, [])
     connections.append(websocket)
@@ -59,4 +62,3 @@ async def auction_live(websocket: WebSocket, auction_id: str):
             connections.remove(websocket)
         if not connections:
             active_auction_connections.pop(auction_id, None)
-
