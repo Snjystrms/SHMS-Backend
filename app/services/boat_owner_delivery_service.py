@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.db.session import get_db_connection
 from app.services import user_service
@@ -265,6 +265,105 @@ def record_delivery(
         conn.rollback()
         print(f"Error recording delivery: {e}")
         return False, "Failed to record delivery"
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_pending_deliveries_for_boat_owner(
+    boat_owner_id: str,
+) -> List[Dict[str, Any]]:
+    """
+    List completed auctions for this boat owner that are not fully delivered yet.
+    Includes both not-started and in-progress (partial) deliveries.
+    """
+    owner_id = _normalize_uuid(boat_owner_id)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                a.id,
+                a.seller_id,
+                a.winner_id,
+                a.fish_name,
+                a.auction_type,
+                a.start_time,
+                a.delivered_quantity,
+                b.boat_number
+            FROM auctions a
+            LEFT JOIN boat_movements m ON m.id = a.movement_id
+            LEFT JOIN bidding_requests br ON br.id = a.bidding_request_id
+            LEFT JOIN boats b ON b.id = COALESCE(m.boat_id, br.boat_id) AND b.deleted_at IS NULL
+            WHERE a.seller_id = %s
+              AND a.status = 'completed'
+            ORDER BY a.start_time DESC
+            """,
+            (owner_id,),
+        )
+        rows = cur.fetchall() or []
+
+        pending: List[Dict[str, Any]] = []
+
+        for r in rows:
+            auction_id = str(r[0])
+            seller_id = str(r[1]) if r[1] else None
+            winner_id = str(r[2]) if r[2] else None
+            fish_name = r[3] or ""
+            auction_type = r[4] or "open_box"
+            start_time = r[5]
+            delivered_quantity = float(r[6] or 0)
+            boat_number = r[7]
+
+            if seller_id != owner_id:
+                continue
+            if not winner_id:
+                continue
+
+            cur.execute(
+                """
+                SELECT amount, quantity
+                FROM bids
+                WHERE auction_id = %s AND bidder_id = %s
+                ORDER BY amount DESC
+                LIMIT 1
+                """,
+                (auction_id, winner_id),
+            )
+            bid_row = cur.fetchone()
+            if not bid_row:
+                continue
+
+            bid_price = float(bid_row[0]) if bid_row[0] is not None else 0.0
+            requested_quantity = (
+                float(bid_row[1]) if bid_row[1] is not None else 0.0
+            )
+
+            if requested_quantity <= 0:
+                continue
+            if delivered_quantity >= requested_quantity:
+                continue
+
+            pending.append(
+                {
+                    "auction_id": auction_id,
+                    "auction_identifier": _auction_identifier(auction_id, boat_number),
+                    "fish_type": fish_name,
+                    "auction_type": _auction_type_display(auction_type),
+                    "bid_price": bid_price,
+                    "requested_quantity": requested_quantity,
+                    "delivered_quantity": delivered_quantity,
+                    "start_time": _format_start_time(start_time),
+                    "status": "Pending Delivery",
+                }
+            )
+
+        return pending
+    except Exception as e:
+        print(f"Error fetching pending deliveries for boat owner: {e}")
+        return []
     finally:
         cur.close()
         conn.close()

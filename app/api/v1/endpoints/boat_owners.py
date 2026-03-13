@@ -31,6 +31,7 @@ from app.schemas.boat_owner_delivery import (
     InitiateDeliveryResponse,
     RecordDeliveryRequest,
     RecordDeliveryResponse,
+    PendingDeliveryItem,
 )
 from app.schemas.trip import (
     TripDetailsAtSeaResponse,
@@ -506,6 +507,23 @@ async def initiate_delivery_details(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err)
 
     return InitiateDeliveryResponse(**detail)
+
+
+@router.get(
+    "/deliveries/pending",
+    response_model=list[PendingDeliveryItem],
+)
+async def list_pending_deliveries(
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """
+    List pending deliveries for the authenticated boat owner.
+    Includes auctions that are completed but not fully delivered yet.
+    """
+    items = boat_owner_delivery_service.get_pending_deliveries_for_boat_owner(
+        boat_owner_id=current_user["id"],
+    )
+    return items
 
 
 # ----- Bidding Requests (boat owner side) -----

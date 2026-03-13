@@ -54,3 +54,17 @@ class RecordDeliveryResponse(BaseModel):
 
     success: bool
     message: str
+
+
+class PendingDeliveryItem(BaseModel):
+    """One pending delivery card item for boat owner."""
+
+    auction_id: str
+    auction_identifier: str
+    fish_type: str
+    auction_type: str
+    bid_price: float
+    requested_quantity: float
+    delivered_quantity: float
+    start_time: str
+    status: str
