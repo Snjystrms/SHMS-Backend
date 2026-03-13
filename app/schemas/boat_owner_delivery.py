@@ -28,6 +28,21 @@ class ScanDeliveryResponse(BaseModel):
     is_already_delivered: bool
 
 
+class InitiateDeliveryResponse(BaseModel):
+    """Response for boat owner initiate delivery screen (post-auction)."""
+
+    auction_id: str
+    buyer_name: str
+    bid_price: float
+    auction_type: str
+    requested_quantity: float
+    delivered_quantity: float
+    fish_type: str
+    start_time: str
+    auction_identifier: str
+    is_already_delivered: bool
+
+
 class RecordDeliveryRequest(BaseModel):
     """Request body for recording delivered quantity."""
 

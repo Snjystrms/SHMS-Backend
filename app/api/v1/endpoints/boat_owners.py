@@ -28,6 +28,7 @@ from app.services import boat_owner_delivery_service
 from app.schemas.boat_owner_delivery import (
     ScanDeliveryRequest,
     ScanDeliveryResponse,
+    InitiateDeliveryResponse,
     RecordDeliveryRequest,
     RecordDeliveryResponse,
 )
@@ -485,6 +486,26 @@ async def record_delivery(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
 
     return RecordDeliveryResponse(success=True, message="Delivery recorded successfully")
+
+
+@router.get("/deliveries/initiate/{auction_id}", response_model=InitiateDeliveryResponse)
+async def initiate_delivery_details(
+    auction_id: str,
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """Get initiate-delivery details for a completed auction (winner + bid + quantities)."""
+    detail, err = boat_owner_delivery_service.get_initiate_delivery_for_auction(
+        auction_id=auction_id,
+        boat_owner_id=current_user["id"],
+    )
+    if err:
+        if "does not belong" in err:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=err)
+        if "no winner" in err.lower():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err)
+
+    return InitiateDeliveryResponse(**detail)
 
 
 # ----- Bidding Requests (boat owner side) -----
