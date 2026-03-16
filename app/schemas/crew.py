@@ -21,6 +21,7 @@ class OfficerRegisterUserRequest(BaseModel):
 class CrewMemberBase(BaseModel):
     name: str
     aadhaar_number: Optional[str] = None
+    email: Optional[str] = None
     contact_number: Optional[str] = None
     emergency_contact_number: Optional[str] = None
     is_pilot: bool = False

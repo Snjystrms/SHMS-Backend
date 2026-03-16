@@ -38,11 +38,12 @@ _scan_result_embeddings: Dict[str, List[float]] = {}
 @router.get("/crew-members", response_model=List[CrewMemberResponse])
 async def list_crew_members(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 10,
+    is_register: Optional[bool] = None,
     current_user: dict = Depends(deps.get_admin_or_officer_user)
 ):
     """List all crew members."""
-    return face_service.get_all_crew_members(skip=skip, limit=limit)
+    return face_service.get_all_crew_members(skip=skip, limit=limit, is_register=is_register)
 
 @router.get("/crew-members/{crew_member_id}", response_model=CrewMemberResponse)
 async def get_crew_member(

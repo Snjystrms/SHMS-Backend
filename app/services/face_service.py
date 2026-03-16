@@ -720,18 +720,28 @@ def get_user_id_by_name(name):
         cur.close()
         conn.close()
 
-def get_all_crew_members(skip=0, limit=100):
-    """List all crew members."""
+def get_all_crew_members(skip: int = 0, limit: int = 10, is_register: Optional[bool] = None):
+    """List crew members with optional is_register filter and pagination."""
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute("""
-            SELECT id, name, aadhaar_number, phone, emergency_contact_number, is_pilot, is_register
+        query = """
+            SELECT id, name, aadhaar_number, email, phone, emergency_contact_number, is_pilot, is_register
             FROM crew_members
             WHERE deleted_at IS NULL
+        """
+        params = []
+        if is_register is not None:
+            query += " AND is_register = %s"
+            params.append(is_register)
+
+        query += """
             ORDER BY created_at DESC
             OFFSET %s LIMIT %s
-        """, (skip, limit))
+        """
+        params.extend([skip, limit])
+
+        cur.execute(query, tuple(params))
         rows = cur.fetchall()
 
         crew_members = []
@@ -740,10 +750,11 @@ def get_all_crew_members(skip=0, limit=100):
                 "id": str(row[0]),
                 "name": row[1],
                 "aadhaar_number": row[2],
-                "contact_number": row[3],
-                "emergency_contact_number": row[4],
-                "is_pilot": row[5] if len(row) > 5 else False,
-                "is_register": row[6] if len(row) > 6 else False,
+                "email": row[3],
+                "contact_number": row[4],
+                "emergency_contact_number": row[5],
+                "is_pilot": row[6] if len(row) > 6 else False,
+                "is_register": row[7] if len(row) > 7 else False,
             })
         return crew_members
     except Exception as e:
@@ -759,7 +770,7 @@ def get_crew_member_by_id(crew_member_id):
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT id, name, aadhaar_number, phone, emergency_contact_number, is_pilot, is_register
+            SELECT id, name, aadhaar_number, email, phone, emergency_contact_number, is_pilot, is_register
             FROM crew_members
             WHERE id = %s AND deleted_at IS NULL
         """, (crew_member_id,))
@@ -770,10 +781,11 @@ def get_crew_member_by_id(crew_member_id):
                 "id": str(row[0]),
                 "name": row[1],
                 "aadhaar_number": row[2],
-                "contact_number": row[3],
-                "emergency_contact_number": row[4],
-                "is_pilot": row[5] if len(row) > 5 else False,
-                "is_register": row[6] if len(row) > 6 else False,
+                "email": row[3],
+                "contact_number": row[4],
+                "emergency_contact_number": row[5],
+                "is_pilot": row[6] if len(row) > 6 else False,
+                "is_register": row[7] if len(row) > 7 else False,
             }
         return None
     except Exception as e:
