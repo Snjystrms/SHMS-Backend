@@ -8,11 +8,13 @@ from app.core import security
 from app.core.config import settings
 from app.services import user_service as crud_user, notification_service
 from app.services import bidding_service
+from app.services import auction_service
 from app.services.otp_registration_service import (
     start_temp_user_registration,
     verify_otp_and_login_with_role,
 )
 from app.schemas.token import Token
+from app.schemas.auction import Auction
 from app.schemas.user import BoatOwnerCreate, BoatCreate, BoatUpdate, ForgotPasswordRequest, BoatOwnerVerifyOtpRequest
 from app.schemas.bidding import (
     BiddingRequestAction,
@@ -63,6 +65,25 @@ async def boat_owner_dashboard(
         "pending_auctions": data["pending_auctions"],
         "updated_at": data["updated_at"],
     }
+
+
+@router.get(
+    "/auctions",
+    response_model=list[Auction],
+)
+async def list_my_auctions(
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """
+    List auctions related to the authenticated boat owner only.
+
+    Includes:
+    - Auctions created directly by the boat owner (movement-based).
+    - Auctions created by an agent using an approved bidding request where this
+      boat owner is the seller (seller_id stored as boat_owner_id).
+    """
+    auctions = auction_service.list_auctions_for_seller(current_user["id"])
+    return auctions
 
 
 @router.get("/notifications")

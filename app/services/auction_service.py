@@ -287,6 +287,55 @@ def list_auctions() -> List[Dict[str, Any]]:
         conn.close()
 
 
+def list_auctions_for_seller(seller_id: str) -> List[Dict[str, Any]]:
+    """
+    Return auctions for a specific seller (boat owner), including:
+    - Self-created auctions (movement_id-based).
+    - Auctions created by an agent from an approved bidding request where this
+      boat owner is the seller (seller_id stored as boat_owner_id).
+    Status is lazily updated using the same IST-based logic as list_auctions().
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Lazily update status for this seller's scheduled/active auctions.
+        cur.execute(
+            f"""
+            UPDATE auctions
+            SET status = CASE
+                    WHEN {_NOW_IST_SQL} >= end_time THEN 'completed'
+                    WHEN {_NOW_IST_SQL} >= start_time THEN 'active'
+                    ELSE status
+                END,
+                updated_at = NOW()
+            WHERE status IN ('scheduled', 'active')
+              AND seller_id = %s
+            """,
+            (seller_id,),
+        )
+        conn.commit()
+
+        cur.execute(
+            """
+            SELECT id, seller_id, fish_name, initial_price, current_price,
+                   start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
+            FROM auctions
+            WHERE seller_id = %s
+            ORDER BY created_at DESC
+            """,
+            (seller_id,),
+        )
+        rows = cur.fetchall()
+        return [_auction_from_row(r) for r in rows]
+    except Exception as e:
+        conn.rollback()
+        print(f"Error listing auctions for seller {seller_id}: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
 def _update_auction_status(conn, auction_id: str, new_status: AuctionStatus) -> None:
     cur = conn.cursor()
     cur.execute(
