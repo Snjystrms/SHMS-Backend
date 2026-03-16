@@ -195,6 +195,77 @@ def get_movement_history(
         conn.close()
 
 
+def get_last_trips_for_boat(boat_id: str, limit: int = 3) -> List[Dict[str, Any]]:
+    """
+    Return last N completed trips for a boat (arrival / temporary_arrival / partial_arrival)
+    ordered by movement_at descending.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                m.id,
+                m.movement_type,
+                m.movement_at,
+                m.departure_at,
+                m.port_name,
+                m.crew_count,
+                b.boat_type,
+                b.harbor_name
+            FROM boat_movements m
+            JOIN boats b
+              ON b.id = m.boat_id
+             AND b.deleted_at IS NULL
+            WHERE m.boat_id = %s
+              AND m.movement_type IN ('arrival', 'temporary_arrival', 'partial_arrival')
+            ORDER BY m.movement_at DESC
+            LIMIT %s
+            """,
+            (boat_id, limit),
+        )
+        rows = cur.fetchall()
+        trips: List[Dict[str, Any]] = []
+        for r in rows:
+            movement_id = str(r[0])
+            movement_type = r[1]
+            movement_at = r[2]
+            departure_at = r[3]
+            port_name = r[4]
+            crew_count = r[5]
+            vessel_type = r[6]
+            harbor_name = r[7]
+
+            if movement_type in ("arrival", "temporary_arrival"):
+                from_port = port_name or harbor_name or "Unknown"
+                to_port = harbor_name or port_name or "Unknown"
+                arr_at = movement_at
+                dep_at = departure_at or movement_at
+            else:
+                from_port = harbor_name or "Unknown"
+                to_port = port_name or harbor_name or "Unknown"
+                dep_at = departure_at or movement_at
+                arr_at = movement_at
+
+            trips.append(
+                {
+                    "movement_id": movement_id,
+                    "departure_at": dep_at,
+                    "arrival_at": arr_at,
+                    "from_port": from_port,
+                    "to_port": to_port,
+                    "vessel_type": vessel_type,
+                    "total_crew": crew_count,
+                    "movement_type": movement_type,
+                }
+            )
+        return trips
+    finally:
+        cur.close()
+        conn.close()
+
+
 def get_dashboard_today_counts() -> Dict[str, Any]:
     """
     Return today's counts for port officer dashboard: departures, arrivals,

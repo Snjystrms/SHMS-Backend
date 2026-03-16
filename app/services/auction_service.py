@@ -8,6 +8,12 @@ from fastapi.websockets import WebSocketState
 from app.db.session import get_db_connection
 from app.schemas.auction import AuctionStatus
 from app.api.v1.endpoints.auction_ws import active_auction_connections
+from app.services import user_service
+from app.services.buyer_dashboard_service import (
+    _auction_identifier,
+    _auction_type_display,
+    _format_start_time,
+)
 
 # Current time in IST for status checks (start_time/end_time treated as IST).
 # PostgreSQL: NOW() in UTC + 5h30m approximates IST for comparison.
@@ -45,6 +51,96 @@ def _auction_from_row(row) -> Dict[str, Any]:
         "auction_type": row[10] if len(row) > 10 else "open_box",
         "movement_id": str(row[11]) if len(row) > 11 and row[11] else None,
     }
+
+
+def get_last_auctions_for_boat(boat_id: str, limit: int = 3) -> List[Dict[str, Any]]:
+    """
+    Return last N auctions related to a boat (via movement.boat_id or bidding_request.boat_id),
+    ordered by start_time / created_at descending, including winner and delivery summary.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                a.id,
+                a.fish_name,
+                a.auction_type,
+                a.start_time,
+                a.status,
+                a.winner_id,
+                a.delivered_quantity,
+                b.boat_number
+            FROM auctions a
+            LEFT JOIN boat_movements m
+              ON m.id = a.movement_id
+            LEFT JOIN bidding_requests br
+              ON br.id = a.bidding_request_id
+            LEFT JOIN boats b
+              ON b.id = COALESCE(m.boat_id, br.boat_id)
+             AND b.deleted_at IS NULL
+            WHERE COALESCE(m.boat_id, br.boat_id) = %s
+            ORDER BY a.start_time DESC NULLS LAST, a.created_at DESC
+            LIMIT %s
+            """,
+            (boat_id, limit),
+        )
+        rows = cur.fetchall()
+        results: List[Dict[str, Any]] = []
+        for r in rows:
+            auction_id = str(r[0])
+            fish_name = r[1] or ""
+            auction_type = r[2] or "open_box"
+            start_time = r[3]
+            status = r[4]
+            winner_id = str(r[5]) if r[5] else None
+            delivered_quantity = float(r[6] or 0.0)
+            boat_number = r[7]
+
+            winner_name: Optional[str] = None
+            bid_price: Optional[float] = None
+            requested_quantity: Optional[float] = None
+
+            if winner_id:
+                cur.execute(
+                    """
+                    SELECT amount, quantity
+                    FROM bids
+                    WHERE auction_id = %s AND bidder_id = %s
+                    ORDER BY amount DESC, created_at ASC
+                    LIMIT 1
+                    """,
+                    (auction_id, winner_id),
+                )
+                bid_row = cur.fetchone()
+                if bid_row:
+                    bid_price = float(bid_row[0])
+                    requested_quantity = (
+                        float(bid_row[1]) if bid_row[1] is not None else None
+                    )
+                user = user_service.get_user_by_id(winner_id)
+                if user:
+                    winner_name = user.get("name") or None
+
+            results.append(
+                {
+                    "auction_id": auction_id,
+                    "fish_type": fish_name,
+                    "auction_type": _auction_type_display(auction_type),
+                    "start_time": _format_start_time(start_time) if start_time else None,
+                    "status": status,
+                    "winner_name": winner_name,
+                    "bid_price": bid_price,
+                    "requested_quantity": requested_quantity,
+                    "delivered_quantity": delivered_quantity,
+                    "auction_identifier": _auction_identifier(auction_id, boat_number),
+                }
+            )
+        return results
+    finally:
+        cur.close()
+        conn.close()
 
 
 def _validate_movement_for_boat_owner(

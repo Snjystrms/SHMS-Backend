@@ -1,8 +1,9 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from app.services import user_service as crud_user, notification_service, trip_service
 from app.schemas.user import UserCreate, UserUpdate, BoatUpdate
 from app.api import deps
+from app.schemas.trip import BoatTripStatusResponse
 from app.core import security
 from app.schemas.crew import (
     CrewScannedHistoryResponse,
@@ -232,6 +233,78 @@ async def get_boat(boat_id: str, current_admin: dict = Depends(deps.get_admin_us
     if not boat:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
     return {"success": True, "boat": boat}
+
+
+@router.get("/boats/{boat_id}/details")
+async def get_boat_details(
+    boat_id: str,
+    request: Request,
+    current_admin: dict = Depends(deps.get_admin_user),
+):
+    """
+    Admin API: aggregate boat details for Boat Details screen:
+    - basic boat info
+    - current trip (if any)
+    - last 3 trips
+    - last 3 auctions
+    - list of issues (placeholder)
+    """
+    boat = crud_user.get_boat_by_id(boat_id)
+    if not boat:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Boat not found",
+        )
+
+    status_data = trip_service.get_boat_trip_status(boat_id)
+    current_trip = None
+    if status_data:
+        base_url = str(request.base_url).rstrip("/")
+        if (
+            status_data.get("departure_details")
+            and status_data["departure_details"].get("image_url")
+        ):
+            img = status_data["departure_details"]["image_url"]
+            if img and not img.startswith("http"):
+                status_data["departure_details"]["image_url"] = (
+                    f"{base_url}/{img.lstrip('/')}"
+                )
+        if status_data.get("last_movement_image_url"):
+            img = status_data["last_movement_image_url"]
+            if img and not img.startswith("http"):
+                status_data["last_movement_image_url"] = (
+                    f"{base_url}/{img.lstrip('/')}"
+                )
+
+        trip_resp = BoatTripStatusResponse(**status_data)
+        dep = trip_resp.departure_details
+        current_trip = {
+            "trip_status": trip_resp.trip_status,
+            "movement_type": trip_resp.movement_type,
+            "departure_at": dep.departure_at if dep else None,
+            "from_port": dep.from_port if dep else None,
+            "vessel_type": dep.vessel_type if dep else boat.get("boat_type"),
+            "crew_count": dep.crew_count if dep else None,
+            "status_label": dep.status_label if dep else None,
+            "image_url": dep.image_url if dep else None,
+        }
+
+    last_trips = trip_service.get_last_trips_for_boat(boat_id, limit=3)
+
+    from app.services import auction_service
+
+    last_auctions = auction_service.get_last_auctions_for_boat(boat_id, limit=3)
+
+    issues: list[dict] = []
+
+    return {
+        "success": True,
+        "boat": boat,
+        "current_trip": current_trip,
+        "last_trips": last_trips,
+        "last_auctions": last_auctions,
+        "issues": issues,
+    }
 
 
 @router.get(
