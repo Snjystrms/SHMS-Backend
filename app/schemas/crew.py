@@ -69,19 +69,22 @@ CrewHistoryDateFilter = Literal["today", "last_7_days", "last_15_days"]
 
 
 class CrewScannedHistoryItem(BaseModel):
-    """One row in the Crew Scanned history list."""
+    """
+    One row in the Crew history list shown to a port officer.
+
+    This is intentionally slimmed down to only expose the fields used in the
+    mobile UI: name, registration status, phone, emergency contact, aadhaar
+    and a timestamp for ordering/labeling.
+    """
 
     crew_id: str
     crew_name: str
-    boat_id: str
-    boat_name: Optional[str] = None
-    boat_number: Optional[str] = None
-    is_pilot: bool = False
     phone_number: Optional[str] = None
-    aadhaar_number: Optional[str] = None
     emergency_contact_number: Optional[str] = None
+    aadhaar_number: Optional[str] = None
+    is_register: bool = False
     movement_at: Optional[str] = None
-    image_url: Optional[str] = None  # Crew face crop URL: /uploads/crew-crops/{crop_id}.png
+    image_url: Optional[str] = None
 
 
 class CrewScannedHistoryResponse(BaseModel):

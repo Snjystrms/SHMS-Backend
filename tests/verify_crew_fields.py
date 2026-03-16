@@ -20,7 +20,13 @@ def test_crew_member_fields():
     
     # 1. Register
     print(f"Registering user with aadhaar={aadhaar}, contact={contact}")
-    user_id = face_service.register_user(name, embedding, aadhaar_number=aadhaar, emergency_contact_number=contact)
+    user_id = face_service.register_user(
+        name,
+        embedding,
+        aadhaar_number=aadhaar,
+        emergency_contact_number=contact,
+        registered_by_user_id=None,
+    )
     
     if not user_id:
         print("FAILED: register_user returned None")

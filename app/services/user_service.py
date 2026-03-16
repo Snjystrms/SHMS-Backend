@@ -448,6 +448,7 @@ def create_pending_crew(
     emergency_contact_number: Optional[str],
     is_pilot: bool,
     embedding_list: List[float],
+    profile_crop_id: Optional[str] = None,
 ) -> bool:
     """Store pending crew registration (before OTP verify). Replaces existing row for same phone."""
     conn = get_db_connection()
@@ -457,8 +458,8 @@ def create_pending_crew(
         cur.execute(
             """
             INSERT INTO pending_crew_registrations
-            (id, phone, name, aadhaar_number, emergency_contact_number, is_pilot, embedding)
-            VALUES (%s, %s, %s, %s, %s, %s, %s::vector)
+            (id, phone, name, aadhaar_number, emergency_contact_number, is_pilot, embedding, profile_crop_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::vector, %s)
             """,
             (
                 str(uuid.uuid4()),
@@ -468,6 +469,7 @@ def create_pending_crew(
                 (emergency_contact_number or "").strip() or None,
                 is_pilot,
                 embedding_list,
+                profile_crop_id,
             ),
         )
         conn.commit()
@@ -510,7 +512,7 @@ def get_pending_crew_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     try:
         cur.execute(
             """
-            SELECT id, phone, name, aadhaar_number, emergency_contact_number, is_pilot, embedding
+            SELECT id, phone, name, aadhaar_number, emergency_contact_number, is_pilot, embedding, profile_crop_id
             FROM pending_crew_registrations WHERE phone = %s
             """,
             (phone.strip(),),
@@ -537,6 +539,7 @@ def get_pending_crew_by_phone(phone: str) -> Optional[Dict[str, Any]]:
             "emergency_contact_number": row[4],
             "is_pilot": row[5],
             "embedding": emb,
+            "profile_crop_id": str(row[7]) if len(row) > 7 and row[7] else None,
         }
     except Exception as e:
         print(f"Error fetching pending crew: {e}")

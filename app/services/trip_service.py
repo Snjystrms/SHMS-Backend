@@ -992,6 +992,9 @@ def get_scanned_crew_history(
     """
     Return list of crew scanned (attached to departures) for movements logged by an officer.
     Used by the Crew Scanned history screen.
+
+    This is also the backing query for the port-officer crew history UI, which
+    groups crew into REGISTERED vs UNVERIFIED buckets based on cm.is_register.
     """
     now = datetime.now(timezone.utc)
     if date_filter == "today":
@@ -1028,6 +1031,7 @@ def get_scanned_crew_history(
                 cm.phone,
                 cm.emergency_contact_number,
                 cm.is_pilot,
+                cm.is_register,
                 b.id AS boat_id,
                 b.boat_name,
                 b.boat_number,
@@ -1054,11 +1058,100 @@ def get_scanned_crew_history(
                 "phone_number": r[3],
                 "emergency_contact_number": r[4],
                 "is_pilot": bool(r[5]) if r[5] is not None else False,
-                "boat_id": str(r[6]),
-                "boat_name": r[7],
-                "boat_number": r[8],
-                "movement_at": r[9].isoformat() if r[9] else None,
-                "image_url": f"/uploads/crew-crops/{r[10]}.png" if r[10] else None,
+                "is_register": bool(r[6]) if r[6] is not None else False,
+                "boat_id": str(r[7]),
+                "boat_name": r[8],
+                "boat_number": r[9],
+                "movement_at": r[10].isoformat() if r[10] else None,
+                "image_url": f"/uploads/crew-crops/{r[11]}.png" if r[11] else None,
+            }
+            for r in rows
+        ]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_registered_crew_history(
+    officer_user_id: str,
+    date_filter: str,
+    is_register: Optional[bool] = None,
+    offset: int = 0,
+    limit: int = 10,
+) -> List[Dict[str, Any]]:
+    """
+    Return list of crew members registered by a specific officer.
+    Uses crew_members.registered_by_user_id for per-officer history.
+    """
+    now = datetime.now(timezone.utc)
+    if date_filter == "today":
+        start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    elif date_filter == "last_7_days":
+        start = now - timedelta(days=7)
+    elif date_filter == "last_15_days":
+        start = now - timedelta(days=15)
+    else:
+        raise ValueError("Invalid date_filter")
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        offset_val = max(int(offset or 0), 0)
+        limit_val = int(limit or 10)
+        if limit_val < 1:
+            limit_val = 1
+        if limit_val > 200:
+            limit_val = 200
+
+        params: List[Any] = [officer_user_id, start]
+        where_extra = ""
+        if is_register is not None:
+            where_extra = " AND cm.is_register = %s"
+            params.append(is_register)
+
+        params.extend([offset_val, limit_val])
+        cur.execute(
+            f"""
+            SELECT
+                cm.id,
+                cm.name,
+                cm.aadhaar_number,
+                cm.phone,
+                cm.emergency_contact_number,
+                cm.is_register,
+                cm.created_at,
+                COALESCE(cm.profile_crop_id::text, last_crop.crop_id) AS crop_id
+            FROM crew_members cm
+            LEFT JOIN LATERAL (
+                SELECT bmc.crop_id::text AS crop_id
+                FROM boat_movement_crew bmc
+                JOIN boat_movements m ON m.id = bmc.movement_id
+                WHERE bmc.crew_member_id = cm.id
+                  AND bmc.crop_id IS NOT NULL
+                ORDER BY m.movement_at DESC NULLS LAST
+                LIMIT 1
+            ) last_crop ON true
+            WHERE cm.deleted_at IS NULL
+              AND cm.registered_by_user_id = %s
+              AND cm.created_at >= %s
+              {where_extra}
+            ORDER BY cm.created_at DESC
+            OFFSET %s
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "crew_id": str(r[0]),
+                "crew_name": r[1] or "",
+                "aadhaar_number": r[2],
+                "phone_number": r[3],
+                "emergency_contact_number": r[4],
+                "is_register": bool(r[5]) if r[5] is not None else False,
+                "movement_at": r[6].isoformat() if r[6] else None,
+                "image_url": f"/uploads/crew-crops/{r[7]}.png" if r[7] else None,
             }
             for r in rows
         ]

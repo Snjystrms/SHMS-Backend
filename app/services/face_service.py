@@ -579,6 +579,8 @@ def register_user_minimal(
     contact_number: Optional[str] = None,
     emergency_contact_number: Optional[str] = None,
     is_pilot: bool = False,
+    registered_by_user_id: Optional[str] = None,
+    profile_crop_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Register a crew member with minimum info (officer flow, no face).
@@ -595,8 +597,8 @@ def register_user_minimal(
             return None  # Duplicate aadhaar; caller may treat as conflict
         crew_member_id = str(uuid.uuid4())
         cur.execute(
-            """INSERT INTO crew_members (id, name, aadhaar_number, phone, emergency_contact_number, is_pilot, is_register)
-               VALUES (%s, %s, %s, %s, %s, %s, false)""",
+            """INSERT INTO crew_members (id, name, aadhaar_number, phone, emergency_contact_number, is_pilot, is_register, registered_by_user_id, profile_crop_id)
+               VALUES (%s, %s, %s, %s, %s, %s, false, %s, %s)""",
             (
                 crew_member_id,
                 (name or "").strip(),
@@ -604,6 +606,8 @@ def register_user_minimal(
                 (contact_number or "").strip() or None,
                 (emergency_contact_number or "").strip() or None,
                 is_pilot,
+                registered_by_user_id,
+                profile_crop_id,
             ),
         )
         conn.commit()
@@ -617,7 +621,16 @@ def register_user_minimal(
         conn.close()
 
 
-def register_user(name, embedding, aadhaar_number=None, contact_number=None, emergency_contact_number=None, is_pilot=False):
+def register_user(
+    name,
+    embedding,
+    aadhaar_number=None,
+    contact_number=None,
+    emergency_contact_number=None,
+    is_pilot=False,
+    registered_by_user_id: Optional[str] = None,
+    profile_crop_id: Optional[str] = None,
+):
     """Register a new crew member with an initial face embedding. Sets is_register=true (full registration)."""
     crew_member_id = str(uuid.uuid4())
     emb_id = str(uuid.uuid4())
@@ -626,9 +639,18 @@ def register_user(name, embedding, aadhaar_number=None, contact_number=None, eme
     cur = conn.cursor()
     try:
         cur.execute(
-            """INSERT INTO crew_members (id, name, aadhaar_number, phone, emergency_contact_number, is_pilot, is_register)
-               VALUES (%s, %s, %s, %s, %s, %s, true)""",
-            (crew_member_id, name, aadhaar_number, contact_number, emergency_contact_number, is_pilot),
+            """INSERT INTO crew_members (id, name, aadhaar_number, phone, emergency_contact_number, is_pilot, is_register, registered_by_user_id, profile_crop_id)
+               VALUES (%s, %s, %s, %s, %s, %s, true, %s, %s)""",
+            (
+                crew_member_id,
+                name,
+                aadhaar_number,
+                contact_number,
+                emergency_contact_number,
+                is_pilot,
+                registered_by_user_id,
+                profile_crop_id,
+            ),
         )
         cur.execute(
             "INSERT INTO crew_face_embeddings (id, crew_member_id, embedding) VALUES (%s, %s, %s)",

@@ -283,27 +283,41 @@ async def get_movement_history(
     response_model=CrewScannedHistoryResponse,
 )
 async def get_crew_scanned_history(
-    request: Request,
     date_filter: CrewHistoryDateFilter = "today",
     is_register: Optional[bool] = None,
+    page: int = 1,
+    page_size: int = 10,
     current_user: dict = Depends(deps.get_admin_or_officer_user),
 ):
     """
-    Crew Scanned history for an officer.
-    Returns crew name, boat name, crew id, boat number, is_pilot,
-    phone number, aadhaar number and emergency contact number.
+    Crew history for an officer.
+    Returns crew name, register status (registered / unverified),
+    phone number, aadhaar number, emergency contact number and timestamp.
     """
+    if page < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="page must be >= 1",
+        )
+    if page_size < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="page_size must be >= 1",
+        )
+    if page_size > 200:
+        page_size = 200
+
+    offset = (page - 1) * page_size
     officer_id = current_user.get("id")
-    records_raw = trip_service.get_scanned_crew_history(
+    # Registration-based history: fetch crew registered by this officer,
+    # filtered by date_filter / is_register, with server-side pagination.
+    records_raw = trip_service.get_registered_crew_history(
         officer_user_id=officer_id,
         date_filter=date_filter,
         is_register=is_register,
+        offset=offset,
+        limit=page_size,
     )
-    # Resolve relative image_url to absolute URL for Android/client compatibility
-    request_base = str(request.base_url)
-    for r in records_raw:
-        if r.get("image_url") and not r["image_url"].startswith("http"):
-            r["image_url"] = resolve_image_url(r["image_url"], request_base)
     records = [CrewScannedHistoryItem(**r) for r in records_raw]
     return CrewScannedHistoryResponse(
         date_filter=date_filter,
@@ -572,39 +586,75 @@ async def arrival_crew_scan(
         )
     faces = raw_result.get("faces", [])
 
-    matched_ids = set()
-    for f in faces:
-        crew = f.get("crew_member")
-        if crew and f.get("is_match") and crew.get("id") in departure_crew_ids:
-            matched_ids.add(crew["id"])
+    present_crew = []
+    missing_crew = []
+    unidentified_count = 0
+    unidentified_crew = []
 
-    present_crew = [
-        ArrivalCrewMemberStatus(
-            crew_member_id=c["id"],
-            name=c["name"],
-            is_pilot=c.get("is_pilot", False),
-            status="present",
+    # When a departure crew list exists, keep the original behaviour:
+    # compare the arrival scan with the crew attached to this trip.
+    if departure_crew:
+        matched_ids = set()
+        for f in faces:
+            crew = f.get("crew_member")
+            if crew and f.get("is_match") and crew.get("id") in departure_crew_ids:
+                matched_ids.add(crew["id"])
+
+        present_crew = [
+            ArrivalCrewMemberStatus(
+                crew_member_id=c["id"],
+                name=c["name"],
+                is_pilot=c.get("is_pilot", False),
+                status="present",
+            )
+            for c in departure_crew
+            if c["id"] in matched_ids
+        ]
+        missing_crew = [
+            ArrivalCrewMemberStatus(
+                crew_member_id=c["id"],
+                name=c["name"],
+                is_pilot=c.get("is_pilot", False),
+                status="missing",
+            )
+            for c in departure_crew
+            if c["id"] not in matched_ids
+        ]
+        unidentified_count = sum(
+            1
+            for f in faces
+            if not (
+                f.get("is_match")
+                and f.get("crew_member")
+                and f["crew_member"].get("id") in departure_crew_ids
+            )
         )
-        for c in departure_crew
-        if c["id"] in matched_ids
-    ]
-    missing_crew = [
-        ArrivalCrewMemberStatus(
-            crew_member_id=c["id"],
-            name=c["name"],
-            is_pilot=c.get("is_pilot", False),
-            status="missing",
-        )
-        for c in departure_crew
-        if c["id"] not in matched_ids
-    ]
-    unidentified_count = sum(
-        1 for f in faces
-        if not (f.get("is_match") and f.get("crew_member") and f["crew_member"].get("id") in departure_crew_ids)
-    )
-    unidentified_crew = [
-        ArrivalUnidentifiedEntry(id=str(uuid.uuid4())) for _ in range(unidentified_count)
-    ]
+    else:
+        # No departure crew recorded for this movement.
+        # Treat matched faces as arrival crew instead of counting them as "unidentified".
+        seen_present_ids = set()
+        for f in faces:
+            crew = f.get("crew_member")
+            if crew and f.get("is_match") and crew.get("id"):
+                cid = crew["id"]
+                if cid in seen_present_ids:
+                    continue
+                seen_present_ids.add(cid)
+                present_crew.append(
+                    ArrivalCrewMemberStatus(
+                        crew_member_id=cid,
+                        name=crew.get("name", ""),
+                        is_pilot=crew.get("is_pilot", False),
+                        status="present",
+                    )
+                )
+        unidentified_count = max(len(faces) - len(present_crew), 0)
+
+    if unidentified_count > 0:
+        unidentified_crew = [
+            ArrivalUnidentifiedEntry(id=str(uuid.uuid4()))
+            for _ in range(unidentified_count)
+        ]
 
     # Generate annotated image with boxes for present/missing/unidentified
     annotated_image_url = None
@@ -703,9 +753,6 @@ async def arrival_inventory_check(
     )
 
     image_url = resolve_image_url(body.image_url, str(request.base_url)) if body.image_url else None
-
-    # Mark temporary_arrival as complete (arrival) after inventory check
-    trip_service.update_movement_to_complete_arrival(movement_id)
 
     return ArrivalInventoryCheckResponse(
         movement_id=movement_id,

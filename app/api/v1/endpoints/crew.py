@@ -135,12 +135,37 @@ async def officer_register_user(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Aadhaar number is required",
         )
+    officer_id = current_user.get("id")
+    profile_crop_id: Optional[str] = None
+    # Prefer crop_id from crop_image_url if provided (scan-result flow).
+    if crop_url:
+        try:
+            parsed = urlparse(crop_url)
+            path_parts = [p for p in parsed.path.split("/") if p]
+            for i, part in enumerate(path_parts):
+                if part == "scan-result" and i + 1 < len(path_parts):
+                    profile_crop_id = path_parts[i + 1]
+                    break
+        except Exception as parse_err:
+            logger.warning("Failed to parse crop_image_url for profile crop: %s", parse_err)
+            profile_crop_id = None
+
+    # If face_image is provided, store a cropped face as profile image.
+    if not profile_crop_id and face_image and hasattr(face_image, "read"):
+        img_bytes = await face_image.read()
+        face_detected, crop_bytes = face_service.detect_face_and_crop(img_bytes)
+        if face_detected and crop_bytes:
+            profile_crop_id = str(uuid.uuid4())
+            save_crew_crop(profile_crop_id, crop_bytes)
+
     crew_member_id = face_service.register_user_minimal(
         name=name,
         aadhaar_number=aadhaar,
         contact_number=contact_number,
         emergency_contact_number=emergency_contact_number,
         is_pilot=is_pilot_val,
+        registered_by_user_id=officer_id,
+        profile_crop_id=profile_crop_id,
     )
     if not crew_member_id:
         raise HTTPException(
@@ -149,10 +174,9 @@ async def officer_register_user(
         )
     # Optionally attach a face embedding from face_image (file) or crop_image_url.
     embedding: Optional[np.ndarray] = None
-    if face_image and hasattr(face_image, "read"):
-        png_bytes = await face_image.read()
-        embedding = face_service.get_embedding(png_bytes)
-    elif crop_url and crew_member_id:
+    # If we already read face_image above for profile crop, we can't re-read it here.
+    # Use crop_url embedding when available; otherwise the officer can re-upload if needed.
+    if crop_url and crew_member_id:
         crop_id: Optional[str] = None
         try:
             parsed = urlparse(crop_url)
@@ -214,6 +238,11 @@ async def create_crew_member(
     """
     image_bytes = await file.read()
     embedding = face_service.get_embedding(image_bytes)
+    face_detected, crop_bytes = face_service.detect_face_and_crop(image_bytes)
+    profile_crop_id: Optional[str] = None
+    if face_detected and crop_bytes:
+        profile_crop_id = str(uuid.uuid4())
+        save_crew_crop(profile_crop_id, crop_bytes)
 
     if embedding is None:
         raise HTTPException(
@@ -244,6 +273,7 @@ async def create_crew_member(
         emergency_contact_number=emergency_contact_number,
         is_pilot=is_pilot_val,
         embedding_list=embedding.tolist(),
+        profile_crop_id=profile_crop_id,
     ):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -296,6 +326,7 @@ async def verify_crew_otp(
     if isinstance(emb, str):
         emb = json.loads(emb)
     embedding = np.array(emb, dtype=np.float32)
+    officer_id = current_user.get("id")
     user_id = face_service.register_user(
         pending["name"],
         embedding,
@@ -303,6 +334,8 @@ async def verify_crew_otp(
         contact_number=pending["phone"],
         emergency_contact_number=pending["emergency_contact_number"],
         is_pilot=pending["is_pilot"],
+        registered_by_user_id=officer_id,
+        profile_crop_id=pending.get("profile_crop_id"),
     )
     if not user_id:
         raise HTTPException(
