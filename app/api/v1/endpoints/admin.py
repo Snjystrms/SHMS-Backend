@@ -215,6 +215,13 @@ async def list_boats(
 ):
     """List all boats. Optionally filter by boat_owner_id."""
     boats = crud_user.get_all_boats(boat_owner_id=boat_owner_id)
+    # Enrich each boat with latest movement id and status
+    for boat in boats:
+        status_data = trip_service.get_boat_trip_status(boat["id"])
+        trip_status = status_data["trip_status"] if status_data else "docked"
+        boat["boat_status"] = "At sea" if trip_status == "sailing" else "At harbour"
+        boat["latest_movement_id"] = status_data.get("latest_movement_id") if status_data else None
+        boat["latest_movement_status"] = status_data.get("movement_type") if status_data else None
     return {"success": True, "boats": boats}
 
 
