@@ -224,6 +224,7 @@ def get_auction_by_id(auction_id: str) -> Optional[Dict[str, Any]]:
                 END,
                 updated_at = NOW()
             WHERE id = %s
+              AND status IN ('scheduled', 'active')
             """,
             (auction_id,),
         )
@@ -330,6 +331,98 @@ def list_auctions_for_seller(seller_id: str) -> List[Dict[str, Any]]:
     except Exception as e:
         conn.rollback()
         print(f"Error listing auctions for seller {seller_id}: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def list_auctions_for_agent(agent_id: str) -> List[Dict[str, Any]]:
+    """
+    Return auctions created by the given agent (via approved bidding requests).
+
+    Note: movement_id-based (boat owner self) auctions are not included because they
+    don't have a bidding_request_id to link back to an agent.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Lazily update status only for this agent's scheduled/active auctions.
+        cur.execute(
+            f"""
+            UPDATE auctions
+            SET status = CASE
+                    WHEN {_NOW_IST_SQL} >= end_time THEN 'completed'
+                    WHEN {_NOW_IST_SQL} >= start_time THEN 'active'
+                    ELSE status
+                END,
+                updated_at = NOW()
+            FROM bidding_requests br
+            WHERE auctions.bidding_request_id = br.id
+              AND br.agent_id = %s
+              AND auctions.status IN ('scheduled', 'active')
+            """,
+            (agent_id,),
+        )
+        conn.commit()
+
+        cur.execute(
+            """
+            SELECT
+                a.id, a.seller_id, a.fish_name, a.initial_price, a.current_price,
+                a.start_time, a.end_time, a.status, a.winner_id, a.bidding_request_id, a.auction_type, a.movement_id
+            FROM auctions a
+            JOIN bidding_requests br ON br.id = a.bidding_request_id
+            WHERE br.agent_id = %s
+            ORDER BY a.created_at DESC
+            """,
+            (agent_id,),
+        )
+        rows = cur.fetchall()
+        return [_auction_from_row(r) for r in rows]
+    except Exception as e:
+        conn.rollback()
+        print(f"Error listing auctions for agent {agent_id}: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
+def list_active_auctions() -> List[Dict[str, Any]]:
+    """Return only currently active auctions (status='active')."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Lazily update status for scheduled/active auctions across all sellers.
+        cur.execute(
+            f"""
+            UPDATE auctions
+            SET status = CASE
+                    WHEN {_NOW_IST_SQL} >= end_time THEN 'completed'
+                    WHEN {_NOW_IST_SQL} >= start_time THEN 'active'
+                    ELSE status
+                END,
+                updated_at = NOW()
+            WHERE status IN ('scheduled', 'active')
+            """
+        )
+        conn.commit()
+
+        cur.execute(
+            """
+            SELECT id, seller_id, fish_name, initial_price, current_price,
+                   start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
+            FROM auctions
+            WHERE status = 'active'
+            ORDER BY created_at DESC
+            """,
+        )
+        rows = cur.fetchall()
+        return [_auction_from_row(r) for r in rows]
+    except Exception as e:
+        conn.rollback()
+        print(f"Error listing active auctions: {e}")
         return []
     finally:
         cur.close()
@@ -481,6 +574,7 @@ def end_auction(auction_id: str, seller_id: str) -> Optional[Dict[str, Any]]:
 
         auction = _auction_from_row(row)
         if auction["status"] == "completed":
+            auction["_ended_now"] = False
             return auction
 
         # Find highest bid (if any)
@@ -511,10 +605,79 @@ def end_auction(auction_id: str, seller_id: str) -> Optional[Dict[str, Any]]:
 
         auction["status"] = "completed"
         auction["winner_id"] = winner_id
+        auction["_ended_now"] = True
         return auction
     except Exception as e:
         conn.rollback()
         print(f"Error ending auction: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def end_auction_by_agent(auction_id: str, agent_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Manually end an auction (agent-created auctions only):
+    - Only the agent who created the auction (via bidding_request) can end it.
+    - Sets status to 'completed'.
+    - Sets winner_id to highest bidder (if any).
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                a.id, a.seller_id, a.fish_name, a.initial_price, a.current_price,
+                a.start_time, a.end_time, a.status, a.winner_id, a.bidding_request_id, a.auction_type, a.movement_id
+            FROM auctions a
+            JOIN bidding_requests br ON br.id = a.bidding_request_id
+            WHERE a.id = %s AND br.agent_id = %s
+            """,
+            (auction_id, agent_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+
+        auction = _auction_from_row(row)
+        if auction["status"] == "completed":
+            auction["_ended_now"] = False
+            return auction
+
+        cur.execute(
+            """
+            SELECT bidder_id, amount
+            FROM bids
+            WHERE auction_id = %s
+            ORDER BY amount DESC, created_at ASC
+            LIMIT 1
+            """,
+            (auction_id,),
+        )
+        bid_row = cur.fetchone()
+        winner_id = bid_row[0] if bid_row else None
+
+        cur.execute(
+            """
+            UPDATE auctions
+            SET status = 'completed',
+                winner_id = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (winner_id, auction_id),
+        )
+        conn.commit()
+
+        auction["status"] = "completed"
+        auction["winner_id"] = winner_id
+        auction["_ended_now"] = True
+        return auction
+    except Exception as e:
+        conn.rollback()
+        print(f"Error ending auction by agent: {e}")
         return None
     finally:
         cur.close()
@@ -714,6 +877,46 @@ async def broadcast_bid(auction_id: str, bid: Dict[str, Any]) -> None:
             await ws.send_json(jsonable_encoder(new_bid_message))
         except Exception as e:
             print(f"Error broadcasting bid to websocket client: {e}")
+            current_connections = active_auction_connections.get(auction_id, [])
+            if ws in current_connections:
+                current_connections.remove(ws)
+            if not current_connections:
+                active_auction_connections.pop(auction_id, None)
+
+
+async def broadcast_auction_ended(auction: Dict[str, Any]) -> None:
+    """
+    Notify all clients connected to this auction's WebSocket that it ended.
+
+    Message format (JSON):
+    {
+        "type": "auction_ended",
+        "auction_id": "<auction UUID>",
+        "winner_id": "<user UUID>|null",
+        "current_price": <float>,
+        "auction": { ...full auction payload... }
+    }
+    """
+    auction_id = str(auction.get("id") or "")
+    if not auction_id:
+        return
+
+    message = {
+        "type": "auction_ended",
+        "auction_id": auction_id,
+        "winner_id": auction.get("winner_id"),
+        "current_price": auction.get("current_price"),
+        "auction": auction,
+    }
+
+    connections = list(active_auction_connections.get(auction_id, []))
+    for ws in connections:
+        if ws.client_state != WebSocketState.CONNECTED:
+            continue
+        try:
+            await ws.send_json(jsonable_encoder(message))
+        except Exception as e:
+            print(f"Error broadcasting auction end to websocket client: {e}")
             current_connections = active_auction_connections.get(auction_id, [])
             if ws in current_connections:
                 current_connections.remove(ws)

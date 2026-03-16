@@ -41,10 +41,17 @@ async def create_auction(
     return auction
 
 
-@router.get("/auctions/active", response_model=List[Auction])
+@router.get("/auctions", response_model=List[Auction])
 async def list_all_auctions():
-    """List all auctions (active and non-active)."""
+    """List all auctions (any status)."""
     auctions = auction_service.list_auctions()
+    return auctions
+
+
+@router.get("/auctions/active", response_model=List[Auction])
+async def list_active_auctions():
+    """List only active auctions (for user/buyer app)."""
+    auctions = auction_service.list_active_auctions()
     return auctions
 
 
@@ -102,20 +109,27 @@ async def delete_auction(
 @router.post("/auctions/{auction_id}/end", response_model=Auction)
 async def end_auction(
     auction_id: str,
-    current_user: dict = Depends(deps.get_boat_owner_user),
+    current_user: dict = Depends(deps.get_boat_owner_or_agent_user),
 ):
     """
     Manually end an auction:
-    - Only the seller (boat owner) can end it.
+    - Only the seller (boat owner) or the agent who created the auction can end it.
     - Status becomes 'completed'.
     - winner_id is set to highest bidder if any.
     """
-    auction = auction_service.end_auction(auction_id, current_user["id"])
+    if current_user["role"] == "agent":
+        auction = auction_service.end_auction_by_agent(auction_id, current_user["id"])
+    else:
+        auction = auction_service.end_auction(auction_id, current_user["id"])
     if not auction:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Could not end auction (not found or not owner).",
         )
+
+    ended_now = bool(auction.pop("_ended_now", False))
+    if ended_now:
+        await auction_service.broadcast_auction_ended(auction)
     return auction
 
 
@@ -147,4 +161,3 @@ async def list_bids_for_auction(auction_id: str):
     """List all bids for a specific auction (any status)."""
     bids = auction_service.list_bids_for_auction(auction_id)
     return bids
-

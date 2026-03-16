@@ -193,6 +193,89 @@ def get_initiate_delivery_for_auction(
         conn.close()
 
 
+def get_initiate_delivery_for_auction_by_agent(
+    auction_id: str, agent_id: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Fetch delivery detail for a completed auction using its winner_id (no QR required).
+    Agent can access only auctions that were created via the agent's approved bidding request.
+    Returns (detail_dict, None) on success, or (None, error_message) on failure.
+    """
+    aid = _normalize_uuid(auction_id)
+    agid = _normalize_uuid(agent_id)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                a.id,
+                a.winner_id,
+                a.fish_name,
+                a.auction_type,
+                a.start_time,
+                a.delivered_quantity,
+                b.boat_number
+            FROM auctions a
+            JOIN bidding_requests br ON br.id = a.bidding_request_id
+            LEFT JOIN boats b ON b.id = br.boat_id AND b.deleted_at IS NULL
+            WHERE a.id = %s
+              AND a.status = 'completed'
+              AND br.agent_id = %s
+            """,
+            (aid, agid),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None, "Auction not found or not completed"
+
+        winner_id = str(r[1]) if r[1] else None
+        if not winner_id:
+            return None, "Auction has no winner"
+
+        auction_id_str = str(r[0])
+        fish_name = r[2] or ""
+        auction_type = r[3] or "open_box"
+        start_time = r[4]
+        delivered_quantity = float(r[5] or 0)
+        boat_number = r[6]
+
+        cur.execute(
+            """
+            SELECT amount, quantity FROM bids
+            WHERE auction_id = %s AND bidder_id = %s
+            ORDER BY amount DESC LIMIT 1
+            """,
+            (auction_id_str, winner_id),
+        )
+        bid_row = cur.fetchone()
+        win_bid = float(bid_row[0]) if bid_row else 0.0
+        requested_quantity = float(bid_row[1]) if bid_row and bid_row[1] is not None else 0.0
+
+        user = user_service.get_user_by_id(winner_id)
+        buyer_name = user.get("name", "") if user else ""
+
+        return {
+            "auction_id": auction_id_str,
+            "buyer_name": buyer_name,
+            "bid_price": win_bid,
+            "auction_type": _auction_type_display(auction_type),
+            "requested_quantity": requested_quantity,
+            "delivered_quantity": delivered_quantity,
+            "fish_type": fish_name,
+            "start_time": _format_start_time(start_time),
+            "auction_identifier": _auction_identifier(auction_id_str, boat_number),
+            "is_already_delivered": delivered_quantity > 0,
+        }, None
+    except Exception as e:
+        print(f"Error fetching initiate delivery details (agent): {e}")
+        return None, "Failed to fetch delivery details"
+    finally:
+        cur.close()
+        conn.close()
+
+
 def record_delivery(
     auction_id: str, boat_owner_id: str, delivered_quantity: float
 ) -> Tuple[bool, Optional[str]]:

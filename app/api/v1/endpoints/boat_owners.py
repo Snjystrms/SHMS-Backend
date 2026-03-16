@@ -72,17 +72,20 @@ async def boat_owner_dashboard(
     response_model=list[Auction],
 )
 async def list_my_auctions(
-    current_user: dict = Depends(deps.get_boat_owner_user),
+    current_user: dict = Depends(deps.get_boat_owner_or_agent_user),
 ):
     """
-    List auctions related to the authenticated boat owner only.
+    List auctions for the authenticated boat owner or agent.
 
     Includes:
     - Auctions created directly by the boat owner (movement-based).
     - Auctions created by an agent using an approved bidding request where this
       boat owner is the seller (seller_id stored as boat_owner_id).
     """
-    auctions = auction_service.list_auctions_for_seller(current_user["id"])
+    if current_user.get("role") == "agent":
+        auctions = auction_service.list_auctions_for_agent(current_user["id"])
+    else:
+        auctions = auction_service.list_auctions_for_seller(current_user["id"])
     return auctions
 
 
@@ -513,13 +516,19 @@ async def record_delivery(
 @router.get("/deliveries/initiate/{auction_id}", response_model=InitiateDeliveryResponse)
 async def initiate_delivery_details(
     auction_id: str,
-    current_user: dict = Depends(deps.get_boat_owner_user),
+    current_user: dict = Depends(deps.get_boat_owner_or_agent_user),
 ):
     """Get initiate-delivery details for a completed auction (winner + bid + quantities)."""
-    detail, err = boat_owner_delivery_service.get_initiate_delivery_for_auction(
-        auction_id=auction_id,
-        boat_owner_id=current_user["id"],
-    )
+    if current_user.get("role") == "agent":
+        detail, err = boat_owner_delivery_service.get_initiate_delivery_for_auction_by_agent(
+            auction_id=auction_id,
+            agent_id=current_user["id"],
+        )
+    else:
+        detail, err = boat_owner_delivery_service.get_initiate_delivery_for_auction(
+            auction_id=auction_id,
+            boat_owner_id=current_user["id"],
+        )
     if err:
         if "does not belong" in err:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=err)
