@@ -144,7 +144,8 @@ def get_officers():
         cur.execute(
             """
             SELECT u.id, u.name, u.email, u.phone, u.role_id, r.name as role_name,
-                   u.aadhaar_number, u.emergency_contact_number
+                   u.aadhaar_number, u.emergency_contact_number,
+                   u.registered_crew_count
             FROM users u
             JOIN roles r ON u.role_id = r.id
             WHERE r.name = 'officer' AND u.deleted_at IS NULL
@@ -162,6 +163,7 @@ def get_officers():
                 "role": row[5],
                 "aadhaar_number": row[6],
                 "emergency_contact_number": row[7],
+                "registered_crew_count": row[8],
             })
         return officers
     except Exception as e:

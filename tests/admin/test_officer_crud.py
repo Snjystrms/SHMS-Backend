@@ -51,6 +51,14 @@ def test_officer_crud():
     
     officers = response.json()["officers"]
     found = any(o["id"] == officer_id for o in officers)
+    # Ensure the new registered_crew_count field is present in list response
+    if found:
+        officer_in_list = next(o for o in officers if o["id"] == officer_id)
+        if "registered_crew_count" in officer_in_list:
+            print(f"✅ Officer {officer_id} has registered_crew_count field: {officer_in_list['registered_crew_count']}")
+        else:
+            print(f"❌ Officer {officer_id} is missing registered_crew_count field")
+            return
     if found:
         print(f"✅ Officer {officer_id} found in list")
     else:
