@@ -1,9 +1,14 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from app.services import user_service as crud_user, notification_service
+from app.services import user_service as crud_user, notification_service, trip_service
 from app.schemas.user import UserCreate, UserUpdate, BoatUpdate
 from app.api import deps
 from app.core import security
+from app.schemas.crew import (
+    CrewScannedHistoryResponse,
+    CrewScannedHistoryItem,
+    CrewHistoryDateFilter,
+)
 
 router = APIRouter()
 
@@ -220,6 +225,54 @@ async def get_boat(boat_id: str, current_admin: dict = Depends(deps.get_admin_us
     if not boat:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Boat not found")
     return {"success": True, "boat": boat}
+
+
+@router.get(
+    "/officers/{officer_id}/crew-history",
+    response_model=CrewScannedHistoryResponse,
+)
+async def get_officer_crew_history(
+    officer_id: str,
+    date_filter: CrewHistoryDateFilter = "today",
+    is_register: Optional[bool] = None,
+    page: int = 1,
+    page_size: int = 10,
+    current_admin: dict = Depends(deps.get_admin_user),
+):
+    """
+    Admin API: list crew members registered by a specific officer.
+
+    Supports filtering by registration status (`is_register`) and basic
+    page/page_size pagination.
+    """
+    if page < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="page must be >= 1",
+        )
+    if page_size < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="page_size must be >= 1",
+        )
+    if page_size > 200:
+        page_size = 200
+
+    offset = (page - 1) * page_size
+
+    records_raw = trip_service.get_registered_crew_history(
+        officer_user_id=officer_id,
+        date_filter=date_filter,
+        is_register=is_register,
+        offset=offset,
+        limit=page_size,
+    )
+    records = [CrewScannedHistoryItem(**r) for r in records_raw]
+    return CrewScannedHistoryResponse(
+        date_filter=date_filter,
+        total_records=len(records),
+        records=records,
+    )
 
 
 @router.put("/boats/{boat_id}")
