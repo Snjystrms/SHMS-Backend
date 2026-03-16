@@ -610,6 +610,15 @@ def register_user_minimal(
                 profile_crop_id,
             ),
         )
+        if registered_by_user_id:
+            cur.execute(
+                """
+                UPDATE users
+                SET unregistered_crew_count = COALESCE(unregistered_crew_count, 0) + 1
+                WHERE id = %s
+                """,
+                (registered_by_user_id,),
+            )
         conn.commit()
         return crew_member_id
     except Exception as e:
@@ -656,6 +665,15 @@ def register_user(
             "INSERT INTO crew_face_embeddings (id, crew_member_id, embedding) VALUES (%s, %s, %s)",
             (emb_id, crew_member_id, embedding.tolist()),
         )
+        if registered_by_user_id:
+            cur.execute(
+                """
+                UPDATE users
+                SET registered_crew_count = COALESCE(registered_crew_count, 0) + 1
+                WHERE id = %s
+                """,
+                (registered_by_user_id,),
+            )
         conn.commit()
         return crew_member_id
     except Exception as e:
@@ -770,6 +788,8 @@ def update_crew_member(crew_member_id, name=None, aadhaar_number=None, contact_n
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        # Optionally detect is_register promotion when needed in future:
+        # current flow does not toggle is_register here, so counters do not change.
         # Build query dynamically based on provided fields
         fields = []
         values = []
@@ -813,11 +833,45 @@ def update_crew_member(crew_member_id, name=None, aadhaar_number=None, contact_n
         conn.close()
 
 def delete_crew_member(crew_member_id):
-    """Delete a crew member."""
+    """Delete a crew member and adjust officer counters."""
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        # Fetch attributes needed for counter adjustment
+        cur.execute(
+            """
+            SELECT registered_by_user_id, is_register
+            FROM crew_members
+            WHERE id = %s
+            """,
+            (crew_member_id,),
+        )
+        row = cur.fetchone()
+        registered_by_user_id = row[0] if row else None
+        is_register = row[1] if row and len(row) > 1 else None
+
         cur.execute("DELETE FROM crew_members WHERE id = %s", (crew_member_id,))
+
+        if cur.rowcount > 0 and registered_by_user_id:
+            if is_register is True:
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET registered_crew_count = GREATEST(COALESCE(registered_crew_count, 0) - 1, 0)
+                    WHERE id = %s
+                    """,
+                    (registered_by_user_id,),
+                )
+            elif is_register is False:
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET unregistered_crew_count = GREATEST(COALESCE(unregistered_crew_count, 0) - 1, 0)
+                    WHERE id = %s
+                    """,
+                    (registered_by_user_id,),
+                )
+
         conn.commit()
         return cur.rowcount > 0
     except Exception as e:

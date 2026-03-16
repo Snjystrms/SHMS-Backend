@@ -960,3 +960,55 @@ def get_boat_by_number_with_owner(boat_number: str) -> Optional[Dict[str, Any]]:
     finally:
         cur.close()
         conn.close()
+
+
+def recompute_officer_crew_counters() -> None:
+    """
+    Recompute registered_crew_count and unregistered_crew_count on users
+    from crew_members for maintenance / repair. Safe to run multiple times.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Ensure columns exist (defensive; should already be there from migrations).
+        cur.execute(
+            """
+            ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS registered_crew_count INTEGER NOT NULL DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS unregistered_crew_count INTEGER NOT NULL DEFAULT 0;
+            """
+        )
+        # Reset all counters to zero
+        cur.execute(
+            """
+            UPDATE users
+            SET registered_crew_count = 0,
+                unregistered_crew_count = 0;
+            """
+        )
+        # Aggregate from crew_members and apply
+        cur.execute(
+            """
+            UPDATE users u
+            SET
+                registered_crew_count = COALESCE(sub.registered_cnt, 0),
+                unregistered_crew_count = COALESCE(sub.unregistered_cnt, 0)
+            FROM (
+                SELECT
+                    registered_by_user_id AS user_id,
+                    COUNT(*) FILTER (WHERE is_register = TRUE  AND deleted_at IS NULL) AS registered_cnt,
+                    COUNT(*) FILTER (WHERE is_register = FALSE AND deleted_at IS NULL) AS unregistered_cnt
+                FROM crew_members
+                WHERE registered_by_user_id IS NOT NULL
+                GROUP BY registered_by_user_id
+            ) AS sub
+            WHERE u.id = sub.user_id;
+            """
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Error recomputing officer crew counters: {e}")
+    finally:
+        cur.close()
+        conn.close()
