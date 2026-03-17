@@ -1,6 +1,6 @@
 """Boat owner registration, OTP login, and boat CRUD (own boats only)."""
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, status, UploadFile
@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.services import user_service as crud_user, notification_service
 from app.services import bidding_service
 from app.services import auction_service
+from app.services import boat_owner_sales_service
 from app.services.otp_registration_service import (
     start_temp_user_registration,
     verify_otp_and_login_with_role,
@@ -43,6 +44,7 @@ from app.schemas.trip import (
     TripDetailsDeparture,
     TripDetailsArrival,
 )
+from app.schemas.boat_owner_sales import BoatOwnerSalesReportResponse, SalesReportFilter
 
 router = APIRouter()
 
@@ -105,6 +107,36 @@ async def list_my_notifications(
         unread_only=unread_only,
     )
     return {"success": True, "notifications": notifications}
+
+
+@router.get("/sales/report", response_model=BoatOwnerSalesReportResponse)
+async def boat_owner_sales_report(
+    filter: SalesReportFilter = Query("last_three_months"),
+    from_date: Optional[date] = Query(None, alias="from_date"),
+    to_date: Optional[date] = Query(None, alias="to_date"),
+    search: Optional[str] = Query(None, alias="search"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(deps.get_boat_owner_user),
+):
+    """
+    Boat owner sales report (per-auction rows).
+
+    - Earnings are computed from `auctions.sale` (set when delivery is recorded).
+    - Date filtering applies to auction `start_time`.
+    """
+    try:
+        return boat_owner_sales_service.get_sales_report(
+            boat_owner_id=current_user["id"],
+            filter_name=filter,
+            from_date=from_date,
+            to_date=to_date,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 def _token_response(user: dict):
