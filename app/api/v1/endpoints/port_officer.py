@@ -730,6 +730,11 @@ async def arrival_inventory_check(
         )
     all_matched = all(it.status == "matched" for it in items)
 
+    # If everything matches, mark this arrival as complete.
+    # Arrival logging first stores a 'temporary_arrival' so that crew/inventory checks can be performed.
+    if all_matched:
+        trip_service.update_movement_to_complete_arrival(movement_id)
+
     # Build check summary for fishing nets and plastic items (bottles + bags)
     dep_net = int(dep_inv.get("fishing_net_count") or 0) if dep_inv else 0
     arr_net = int(body.fishing_net_count or 0)
