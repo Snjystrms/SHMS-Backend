@@ -118,6 +118,100 @@ def get_delivery_by_qr(
         conn.close()
 
 
+def get_delivery_by_qr_for_agent(
+    auction_id: str, buyer_id: str, agent_id: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Fetch delivery detail for an auction by QR payload (auction_id, buyer_id).
+    Agent can access only auctions created via the agent's bidding requests.
+    Returns (detail_dict, None) on success, or (None, error_message) on failure.
+    """
+    aid = _normalize_uuid(auction_id)
+    bid = _normalize_uuid(buyer_id)
+    agid = _normalize_uuid(agent_id)
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                a.id,
+                a.winner_id,
+                a.fish_name,
+                a.auction_type,
+                a.start_time,
+                a.delivered_quantity,
+                a.delivery_status,
+                a.delivered_at,
+                a.delivery_recorded_by,
+                a.sale,
+                b.boat_number
+            FROM auctions a
+            JOIN bidding_requests br ON br.id = a.bidding_request_id
+            LEFT JOIN boats b ON b.id = br.boat_id AND b.deleted_at IS NULL
+            WHERE a.id = %s
+              AND a.status = 'completed'
+              AND br.agent_id = %s
+              AND a.winner_id = %s
+            """,
+            (aid, agid, bid),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None, "Auction not found or buyer did not win"
+
+        auction_id_str = str(r[0])
+        fish_name = r[2] or ""
+        auction_type = r[3] or "open_box"
+        start_time = r[4]
+        delivered_quantity = float(r[5] or 0)
+        delivery_status = (r[6] or "pending").strip().lower()
+        delivered_at = r[7]
+        delivery_recorded_by = str(r[8]) if r[8] else None
+        sale = float(r[9]) if r[9] is not None else None
+        boat_number = r[10]
+
+        cur.execute(
+            """
+            SELECT amount, quantity FROM bids
+            WHERE auction_id = %s AND bidder_id = %s
+            ORDER BY amount DESC LIMIT 1
+            """,
+            (auction_id_str, bid),
+        )
+        bid_row = cur.fetchone()
+        my_bid = float(bid_row[0]) if bid_row else 0.0
+        required_quantity = float(bid_row[1]) if bid_row and bid_row[1] is not None else 0.0
+
+        user = user_service.get_user_by_id(bid)
+        buyer_name = user.get("name", "") if user else ""
+
+        return {
+            "auction_id": auction_id_str,
+            "buyer_name": buyer_name,
+            "bid_price": my_bid,
+            "auction_type": _auction_type_display(auction_type),
+            "requested_quantity": required_quantity,
+            "delivered_quantity": delivered_quantity,
+            "sale": sale,
+            "delivery_status": "completed" if delivery_status == "completed" else "pending",
+            "delivered_at": delivered_at,
+            "delivery_recorded_by": delivery_recorded_by,
+            "fish_type": fish_name,
+            "start_time": _format_start_time(start_time),
+            "auction_identifier": _auction_identifier(auction_id_str, boat_number),
+            "is_already_delivered": delivered_quantity > 0,
+        }, None
+    except Exception as e:
+        print(f"Error fetching delivery by QR (agent): {e}")
+        return None, "Failed to fetch delivery details"
+    finally:
+        cur.close()
+        conn.close()
+
+
+
 def get_initiate_delivery_for_auction(
     auction_id: str, boat_owner_id: str
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -392,6 +486,95 @@ def record_delivery(
     except Exception as e:
         conn.rollback()
         print(f"Error recording delivery: {e}")
+        return False, "Failed to record delivery"
+    finally:
+        cur.close()
+        conn.close()
+
+
+def record_delivery_by_agent(
+    auction_id: str, agent_id: str, delivered_quantity: float
+) -> Tuple[bool, Optional[str]]:
+    """
+    Record delivered quantity for an auction created via the agent's bidding request.
+    Returns (True, None) on success, or (False, error_message) on failure.
+    """
+    aid = _normalize_uuid(auction_id)
+    agid = _normalize_uuid(agent_id)
+
+    if delivered_quantity <= 0:
+        return False, "Delivered quantity must be greater than 0"
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                a.id,
+                a.winner_id,
+                a.delivered_quantity,
+                a.delivery_status
+            FROM auctions a
+            JOIN bidding_requests br ON br.id = a.bidding_request_id
+            WHERE a.id = %s
+              AND a.status = 'completed'
+              AND br.agent_id = %s
+            """,
+            (aid, agid),
+        )
+        r = cur.fetchone()
+        if not r:
+            return False, "Auction not found or not completed"
+
+        winner_id = str(r[1]) if r[1] else None
+        existing_delivered = float(r[2] or 0)
+        existing_status = (r[3] or "pending").strip().lower()
+
+        if existing_delivered > 0 or existing_status == "completed":
+            return False, "Delivery already recorded"
+
+        if not winner_id:
+            return False, "Auction has no winner"
+
+        cur.execute(
+            """
+            SELECT amount, quantity FROM bids
+            WHERE auction_id = %s AND bidder_id = %s
+            ORDER BY amount DESC LIMIT 1
+            """,
+            (aid, winner_id),
+        )
+        bid_row = cur.fetchone()
+        winning_amount = float(bid_row[0]) if bid_row and bid_row[0] is not None else 0.0
+        required_quantity = float(bid_row[1]) if bid_row and bid_row[1] is not None else 0.0
+        sale = winning_amount * required_quantity
+
+        if required_quantity > 0 and delivered_quantity > required_quantity:
+            return False, f"Delivered quantity cannot exceed requested quantity ({required_quantity} KG)"
+
+        new_status = "completed" if required_quantity > 0 and delivered_quantity >= required_quantity else "pending"
+        cur.execute(
+            """
+            UPDATE auctions
+            SET delivered_quantity = %s,
+                delivery_status = %s,
+                sale = %s,
+                delivered_at = NOW(),
+                delivery_recorded_by = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (delivered_quantity, new_status, sale, agid, aid),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            return False, "Failed to update delivery"
+
+        return True, None
+    except Exception as e:
+        conn.rollback()
+        print(f"Error recording delivery (agent): {e}")
         return False, "Failed to record delivery"
     finally:
         cur.close()

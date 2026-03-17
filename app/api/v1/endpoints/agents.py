@@ -29,7 +29,16 @@ from app.schemas.bidding import (
     BiddingRequestItem,
     BiddingRequestListResponse,
 )
-from app.schemas.boat_owner_delivery import PendingDeliveryItem
+import json
+
+from app.schemas.boat_owner_delivery import (
+    InitiateDeliveryResponse,
+    PendingDeliveryItem,
+    RecordDeliveryRequest,
+    RecordDeliveryResponse,
+    ScanDeliveryRequest,
+    ScanDeliveryResponse,
+)
 from app.schemas.agent_auction import AgentAuctionListItem
 
 
@@ -222,6 +231,82 @@ async def list_agent_deliveries(
         status_filter=status_value,
     )
     return items
+
+
+@router.get("/deliveries/initiate/{auction_id}", response_model=InitiateDeliveryResponse)
+async def initiate_delivery_details_for_agent(
+    auction_id: str,
+    current_user: dict = Depends(deps.get_agent_user),
+):
+    """Get initiate-delivery details for a completed auction (winner + bid + quantities)."""
+    detail, err = boat_owner_delivery_service.get_initiate_delivery_for_auction_by_agent(
+        auction_id=auction_id,
+        agent_id=current_user["id"],
+    )
+    if err:
+        if "no winner" in err.lower():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err)
+
+    return InitiateDeliveryResponse(**detail)
+
+
+@router.post("/deliveries/scan", response_model=ScanDeliveryResponse)
+async def scan_delivery_qr_for_agent(
+    body: ScanDeliveryRequest,
+    current_user: dict = Depends(deps.get_agent_user),
+):
+    """
+    Resolve QR payload to delivery details. Agent scans buyer's QR code.
+    Provide either qr_payload (JSON string) or auction_id + buyer_id.
+    """
+    auction_id = body.auction_id
+    buyer_id = body.buyer_id
+
+    if body.qr_payload:
+        try:
+            payload = json.loads(body.qr_payload)
+            auction_id = payload.get("auction_id") or auction_id
+            buyer_id = payload.get("buyer_id") or buyer_id
+        except (json.JSONDecodeError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid qr_payload: expected JSON with auction_id and buyer_id",
+            )
+
+    if not auction_id or not buyer_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide auction_id and buyer_id, or qr_payload",
+        )
+
+    detail, err = boat_owner_delivery_service.get_delivery_by_qr_for_agent(
+        auction_id=auction_id,
+        buyer_id=buyer_id,
+        agent_id=current_user["id"],
+    )
+    if err:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err)
+
+    return ScanDeliveryResponse(**detail)
+
+
+@router.post("/deliveries/{auction_id}/record", response_model=RecordDeliveryResponse)
+async def record_delivery_for_agent(
+    auction_id: str,
+    body: RecordDeliveryRequest,
+    current_user: dict = Depends(deps.get_agent_user),
+):
+    """Record delivered quantity for an auction created via this agent's bidding request."""
+    _, err = boat_owner_delivery_service.record_delivery_by_agent(
+        auction_id=auction_id,
+        agent_id=current_user["id"],
+        delivered_quantity=body.delivered_quantity,
+    )
+    if err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
+
+    return RecordDeliveryResponse(success=True, message="Delivery recorded successfully")
 
 
 @router.get(
