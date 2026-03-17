@@ -104,6 +104,85 @@ def test_arrival_completion_flow():
     assert status_body["movement_type"] == "arrival"
 
 
+def test_arrival_completion_even_if_inventory_mismatch():
+    """
+    Flow:
+    - create pending boat
+    - log departure (temporary_departure)
+    - attach inventory (departure)
+    - log arrival (temporary_arrival)
+    - run arrival inventory check with mismatching values
+    - verify trip-status is arrived and movement_type is arrival
+    """
+
+    headers = _login_officer()
+
+    boat_number = f"TEST-{uuid.uuid4().hex[:6].upper()}"
+    pending_boat_data = {
+        "boat_number": boat_number,
+        "mobile_number": "9999999999",
+    }
+    resp = requests.post(
+        f"{BASE_URL}/port-officer/boats/pending-register",
+        json=pending_boat_data,
+        headers=headers,
+    )
+    resp.raise_for_status()
+    boat_id = resp.json()["boat_id"]
+
+    resp = requests.post(
+        f"{BASE_URL}/port-officer/boats/{boat_id}/movements",
+        json={"movement_type": "departure"},
+        headers=headers,
+    )
+    resp.raise_for_status()
+    movement_id = resp.json()["id"]
+
+    dep_inventory = {
+        "diesel_liters": 10.0,
+        "ice_blocks": 2,
+        "fishing_net_count": 5,
+        "plastic_bottle_count": 3,
+        "plastic_bag_count": 4,
+    }
+    resp = requests.post(
+        f"{BASE_URL}/port-officer/movements/{movement_id}/inventory",
+        json=dep_inventory,
+        headers=headers,
+    )
+    resp.raise_for_status()
+
+    resp = requests.post(
+        f"{BASE_URL}/port-officer/boats/{boat_id}/movements",
+        json={"movement_type": "arrival"},
+        headers=headers,
+    )
+    resp.raise_for_status()
+    assert resp.json()["movement_type"] == "temporary_arrival"
+
+    mismatch_inventory = {
+        **dep_inventory,
+        "fishing_net_count": 0,
+    }
+    resp = requests.post(
+        f"{BASE_URL}/port-officer/movements/{movement_id}/arrival/inventory/check",
+        json=mismatch_inventory,
+        headers=headers,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    assert body["all_matched"] is False
+
+    resp = requests.get(
+        f"{BASE_URL}/port-officer/boats/{boat_id}/trip-status",
+        headers=headers,
+    )
+    resp.raise_for_status()
+    status_body = resp.json()
+    assert status_body["trip_status"] == "arrived"
+    assert status_body["movement_type"] == "arrival"
+
+
 if __name__ == "__main__":
     test_arrival_completion_flow()
     print("✅ Arrival completion flow passed.")
