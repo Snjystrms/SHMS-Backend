@@ -9,6 +9,7 @@ from app.api import deps
 from app.services import user_service as crud_user
 from app.services import trip_service, notification_service
 from app.services import bidding_service
+from app.services import boat_owner_delivery_service
 from app.services.otp_registration_service import (
     start_temp_user_registration,
     verify_otp_and_login_with_role,
@@ -27,6 +28,7 @@ from app.schemas.bidding import (
     BiddingRequestItem,
     BiddingRequestListResponse,
 )
+from app.schemas.boat_owner_delivery import PendingDeliveryItem
 
 
 router = APIRouter()
@@ -192,4 +194,30 @@ async def list_my_bidding_requests(
         total=len(requests),
         bidding_requests=[BiddingRequestItem(**r) for r in requests],
     )
+
+
+@router.get(
+    "/deliveries",
+    response_model=list[PendingDeliveryItem],
+)
+async def list_agent_deliveries(
+    status_filter: Optional[str] = Query("pending", alias="status"),
+    current_user: dict = Depends(deps.get_agent_user),
+):
+    """
+    List deliveries for the authenticated agent filtered by status.
+    Query param: ?status=pending|completed
+    """
+    status_value = (status_filter or "pending").strip().lower()
+    if status_value not in {"pending", "completed"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid status. Allowed values: pending, completed",
+        )
+
+    items = boat_owner_delivery_service.get_deliveries_for_agent(
+        agent_id=current_user["id"],
+        status_filter=status_value,
+    )
+    return items
 

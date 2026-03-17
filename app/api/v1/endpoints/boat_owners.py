@@ -540,18 +540,27 @@ async def initiate_delivery_details(
 
 
 @router.get(
-    "/deliveries/pending",
+    "/deliveries",
     response_model=list[PendingDeliveryItem],
 )
 async def list_pending_deliveries(
+    status_filter: Optional[str] = Query("pending", alias="status"),
     current_user: dict = Depends(deps.get_boat_owner_user),
 ):
     """
-    List pending deliveries for the authenticated boat owner.
-    Includes auctions that are completed but not fully delivered yet.
+    List deliveries for the authenticated boat owner filtered by status.
+    Query param: ?status=pending|completed
     """
-    items = boat_owner_delivery_service.get_pending_deliveries_for_boat_owner(
+    status_value = (status_filter or "pending").strip().lower()
+    if status_value not in {"pending", "completed"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid status. Allowed values: pending, completed",
+        )
+
+    items = boat_owner_delivery_service.get_deliveries_for_boat_owner(
         boat_owner_id=current_user["id"],
+        status_filter=status_value,
     )
     return items
 
