@@ -832,7 +832,7 @@ def end_auction_by_agent(auction_id: str, agent_id: str) -> Optional[Dict[str, A
         cur.execute(
             """
             SELECT
-                a.id, a.seller_id, a.fish_name, a.initial_price, a.current_price,
+                a.id, a.seller_id, a.fish_name, a.initial_price, a.current_price, a.sale,
                 a.start_time, a.end_time, a.status, a.winner_id, a.bidding_request_id, a.auction_type, a.movement_id
             FROM auctions a
             JOIN bidding_requests br ON br.id = a.bidding_request_id
