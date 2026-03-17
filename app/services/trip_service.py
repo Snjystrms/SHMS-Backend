@@ -1026,17 +1026,31 @@ def set_boat_movement_crew(
     crew_crop_ids: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
-    Attach crew list to a specific departure movement.
+    Attach crew list to a specific movement.
     Overwrites any existing crew entries for this movement and updates crew_count.
     crew_crop_ids: optional mapping of crew_member_id -> crop_id for face image display.
     """
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        # Historically crew was only attached to departures. For partial_arrival flows,
+        # allow attaching crew to the partial_arrival movement as well.
         key = _get_departure_movement_by_id(cur, movement_id)
-        if not key:
-            return None, "Departure movement not found"
-        _movement_id, boat_id = key
+        if key:
+            _movement_id, boat_id = key
+        else:
+            cur.execute(
+                """
+                SELECT id, boat_id
+                FROM boat_movements
+                WHERE id = %s AND movement_type = 'partial_arrival'
+                """,
+                (movement_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None, "Departure movement not found"
+            boat_id = str(row[1])
 
         # Remove existing crew assignments for this movement
         cur.execute(
