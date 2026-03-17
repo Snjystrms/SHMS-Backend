@@ -499,6 +499,9 @@ def list_agent_auction_cards(agent_id: str, status: str) -> List[Dict[str, Any]]
     status_value = (status or "active").strip().lower()
     if status_value not in {"active", "completed"}:
         return []
+    # Treat the Agent app "active" tab as "ongoing", which includes scheduled
+    # auctions that haven't started yet as well as currently active ones.
+    status_values = ["completed"] if status_value == "completed" else ["scheduled", "active"]
 
     conn = get_db_connection()
     cur = conn.cursor()
@@ -543,10 +546,10 @@ def list_agent_auction_cards(agent_id: str, status: str) -> List[Dict[str, Any]]
              AND b.deleted_at IS NULL
             LEFT JOIN users u ON u.id = a.winner_id
             WHERE br.agent_id = %s
-              AND a.status = %s
+              AND a.status = ANY(%s)
             ORDER BY a.start_time DESC NULLS LAST, a.created_at DESC
             """,
-            (agent_id, status_value),
+            (agent_id, status_values),
         )
         rows = cur.fetchall()
 
