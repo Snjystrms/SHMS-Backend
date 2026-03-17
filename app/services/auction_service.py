@@ -35,21 +35,23 @@ def _normalize_to_ist(dt: datetime) -> datetime:
 
 def _auction_from_row(row) -> Dict[str, Any]:
     """Map auctions table row to dict. Times normalized to IST for consistent API response."""
-    start = row[5]
-    end = row[6]
+    sale = row[5]
+    start = row[6]
+    end = row[7]
     return {
         "id": str(row[0]),
         "seller_id": str(row[1]),
         "fish_name": row[2],
         "initial_price": float(row[3]),
         "current_price": float(row[4]),
+        "sale": (float(sale) if sale is not None else None),
         "start_time": _normalize_to_ist(start) if start else None,
         "end_time": _normalize_to_ist(end) if end else None,
-        "status": row[7],
-        "winner_id": str(row[8]) if row[8] else None,
-        "bidding_request_id": str(row[9]) if len(row) > 9 and row[9] else None,
-        "auction_type": row[10] if len(row) > 10 else "open_box",
-        "movement_id": str(row[11]) if len(row) > 11 and row[11] else None,
+        "status": row[8],
+        "winner_id": str(row[9]) if row[9] else None,
+        "bidding_request_id": str(row[10]) if len(row) > 10 and row[10] else None,
+        "auction_type": row[11] if len(row) > 11 else "open_box",
+        "movement_id": str(row[12]) if len(row) > 12 and row[12] else None,
     }
 
 
@@ -287,6 +289,7 @@ def create_auction(
             "fish_name": fish_name,
             "initial_price": initial_price,
             "current_price": initial_price,
+            "sale": None,
             "start_time": start_time_ist,
             "end_time": end_time_ist,
             "status": "scheduled",
@@ -328,7 +331,7 @@ def get_auction_by_id(auction_id: str) -> Optional[Dict[str, Any]]:
 
         cur.execute(
             """
-            SELECT id, seller_id, fish_name, initial_price, current_price,
+            SELECT id, seller_id, fish_name, initial_price, current_price, sale,
                    start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             WHERE id = %s
@@ -367,7 +370,7 @@ def list_auctions() -> List[Dict[str, Any]]:
 
         cur.execute(
             """
-            SELECT id, seller_id, fish_name, initial_price, current_price,
+            SELECT id, seller_id, fish_name, initial_price, current_price, sale,
                    start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             ORDER BY created_at DESC
@@ -414,7 +417,7 @@ def list_auctions_for_seller(seller_id: str) -> List[Dict[str, Any]]:
 
         cur.execute(
             """
-            SELECT id, seller_id, fish_name, initial_price, current_price,
+            SELECT id, seller_id, fish_name, initial_price, current_price, sale,
                    start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             WHERE seller_id = %s
@@ -450,7 +453,7 @@ def list_auctions_for_agent(agent_id: str) -> List[Dict[str, Any]]:
             SET status = CASE
                     WHEN {_NOW_IST_SQL} >= end_time THEN 'completed'
                     WHEN {_NOW_IST_SQL} >= start_time THEN 'active'
-                    ELSE status
+                    ELSE auctions.status
                 END,
                 updated_at = NOW()
             FROM bidding_requests br
@@ -465,7 +468,7 @@ def list_auctions_for_agent(agent_id: str) -> List[Dict[str, Any]]:
         cur.execute(
             """
             SELECT
-                a.id, a.seller_id, a.fish_name, a.initial_price, a.current_price,
+                a.id, a.seller_id, a.fish_name, a.initial_price, a.current_price, a.sale,
                 a.start_time, a.end_time, a.status, a.winner_id, a.bidding_request_id, a.auction_type, a.movement_id
             FROM auctions a
             JOIN bidding_requests br ON br.id = a.bidding_request_id
@@ -507,7 +510,7 @@ def list_agent_auction_cards(agent_id: str, status: str) -> List[Dict[str, Any]]
             SET status = CASE
                     WHEN {_NOW_IST_SQL} >= end_time THEN 'completed'
                     WHEN {_NOW_IST_SQL} >= start_time THEN 'active'
-                    ELSE status
+                    ELSE auctions.status
                 END,
                 updated_at = NOW()
             FROM bidding_requests br
@@ -611,7 +614,7 @@ def list_active_auctions() -> List[Dict[str, Any]]:
 
         cur.execute(
             """
-            SELECT id, seller_id, fish_name, initial_price, current_price,
+            SELECT id, seller_id, fish_name, initial_price, current_price, sale,
                    start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             WHERE status = 'active'
@@ -653,7 +656,7 @@ def update_auction(
         # Fetch existing auction to validate ownership and state
         cur.execute(
             """
-            SELECT id, seller_id, fish_name, initial_price, current_price,
+            SELECT id, seller_id, fish_name, initial_price, current_price, sale,
                    start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             WHERE id = %s AND seller_id = %s
@@ -761,7 +764,7 @@ def end_auction(auction_id: str, seller_id: str) -> Optional[Dict[str, Any]]:
         # Ensure auction exists and belongs to seller
         cur.execute(
             """
-            SELECT id, seller_id, fish_name, initial_price, current_price,
+            SELECT id, seller_id, fish_name, initial_price, current_price, sale,
                    start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             WHERE id = %s AND seller_id = %s
@@ -943,7 +946,7 @@ def create_bid(
     try:
         cur.execute(
             """
-            SELECT id, seller_id, fish_name, initial_price, current_price,
+            SELECT id, seller_id, fish_name, initial_price, current_price, sale,
                    start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             WHERE id = %s

@@ -50,6 +50,7 @@ def get_delivery_by_qr(
                 a.delivery_status,
                 a.delivered_at,
                 a.delivery_recorded_by,
+                a.sale,
                 b.boat_number
             FROM auctions a
             LEFT JOIN boat_movements m ON m.id = a.movement_id
@@ -75,7 +76,8 @@ def get_delivery_by_qr(
         delivery_status = (r[6] or "pending").strip().lower()
         delivered_at = r[7]
         delivery_recorded_by = str(r[8]) if r[8] else None
-        boat_number = r[9]
+        sale = float(r[9]) if r[9] is not None else None
+        boat_number = r[10]
 
         cur.execute(
             """
@@ -99,6 +101,7 @@ def get_delivery_by_qr(
             "auction_type": _auction_type_display(auction_type),
             "requested_quantity": required_quantity,
             "delivered_quantity": delivered_quantity,
+            "sale": sale,
             "delivery_status": "completed" if delivery_status == "completed" else "pending",
             "delivered_at": delivered_at,
             "delivery_recorded_by": delivery_recorded_by,
@@ -142,6 +145,7 @@ def get_initiate_delivery_for_auction(
                 a.delivery_status,
                 a.delivered_at,
                 a.delivery_recorded_by,
+                a.sale,
                 b.boat_number
             FROM auctions a
             LEFT JOIN boat_movements m ON m.id = a.movement_id
@@ -171,7 +175,8 @@ def get_initiate_delivery_for_auction(
         delivery_status = (r[7] or "pending").strip().lower()
         delivered_at = r[8]
         delivery_recorded_by = str(r[9]) if r[9] else None
-        boat_number = r[10]
+        sale = float(r[10]) if r[10] is not None else None
+        boat_number = r[11]
 
         cur.execute(
             """
@@ -195,6 +200,7 @@ def get_initiate_delivery_for_auction(
             "auction_type": _auction_type_display(auction_type),
             "requested_quantity": requested_quantity,
             "delivered_quantity": delivered_quantity,
+            "sale": sale,
             "delivery_status": "completed" if delivery_status == "completed" else "pending",
             "delivered_at": delivered_at,
             "delivery_recorded_by": delivery_recorded_by,
@@ -237,6 +243,7 @@ def get_initiate_delivery_for_auction_by_agent(
                 a.delivery_status,
                 a.delivered_at,
                 a.delivery_recorded_by,
+                a.sale,
                 b.boat_number
             FROM auctions a
             JOIN bidding_requests br ON br.id = a.bidding_request_id
@@ -263,7 +270,8 @@ def get_initiate_delivery_for_auction_by_agent(
         delivery_status = (r[6] or "pending").strip().lower()
         delivered_at = r[7]
         delivery_recorded_by = str(r[8]) if r[8] else None
-        boat_number = r[9]
+        sale = float(r[9]) if r[9] is not None else None
+        boat_number = r[10]
 
         cur.execute(
             """
@@ -287,6 +295,7 @@ def get_initiate_delivery_for_auction_by_agent(
             "auction_type": _auction_type_display(auction_type),
             "requested_quantity": requested_quantity,
             "delivered_quantity": delivered_quantity,
+            "sale": sale,
             "delivery_status": "completed" if delivery_status == "completed" else "pending",
             "delivered_at": delivered_at,
             "delivery_recorded_by": delivery_recorded_by,
@@ -347,14 +356,16 @@ def record_delivery(
 
         cur.execute(
             """
-            SELECT quantity FROM bids
+            SELECT amount, quantity FROM bids
             WHERE auction_id = %s AND bidder_id = %s
             ORDER BY amount DESC LIMIT 1
             """,
             (aid, winner_id),
         )
         bid_row = cur.fetchone()
-        required_quantity = float(bid_row[0]) if bid_row and bid_row[0] is not None else 0.0
+        winning_amount = float(bid_row[0]) if bid_row and bid_row[0] is not None else 0.0
+        required_quantity = float(bid_row[1]) if bid_row and bid_row[1] is not None else 0.0
+        sale = winning_amount * required_quantity
 
         if required_quantity > 0 and delivered_quantity > required_quantity:
             return False, f"Delivered quantity cannot exceed requested quantity ({required_quantity} KG)"
@@ -365,12 +376,13 @@ def record_delivery(
             UPDATE auctions
             SET delivered_quantity = %s,
                 delivery_status = %s,
+                sale = %s,
                 delivered_at = NOW(),
                 delivery_recorded_by = %s,
                 updated_at = NOW()
             WHERE id = %s AND seller_id = %s
             """,
-            (delivered_quantity, new_status, owner_id, aid, owner_id),
+            (delivered_quantity, new_status, sale, owner_id, aid, owner_id),
         )
         conn.commit()
         if cur.rowcount == 0:

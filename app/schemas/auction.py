@@ -48,6 +48,7 @@ class Auction(BaseModel):
     fish_name: str
     initial_price: float
     current_price: float
+    sale: Optional[float] = None
     start_time: datetime
     end_time: Optional[datetime] = None
     status: AuctionStatus

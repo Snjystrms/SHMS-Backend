@@ -21,6 +21,7 @@ class DeliveryListItem(BaseModel):
     my_bid: float
     required_quantity: float
     delivered_quantity: float
+    sale: Optional[float] = None
     delivery_status: str
     delivered_at: Optional[datetime] = None
 
@@ -45,6 +46,7 @@ class DeliveryDetail(BaseModel):
     my_bid: float
     required_quantity: float
     delivered_quantity: float
+    sale: Optional[float] = None
     delivery_status: str
     delivered_at: Optional[datetime] = None
     buyer_name: str

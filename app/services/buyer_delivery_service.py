@@ -47,6 +47,7 @@ def list_deliveries(buyer_id: str) -> List[Dict[str, Any]]:
                 a.id,
                 a.fish_name,
                 a.initial_price,
+                a.sale,
                 a.auction_type,
                 a.start_time,
                 a.delivered_quantity,
@@ -71,14 +72,15 @@ def list_deliveries(buyer_id: str) -> List[Dict[str, Any]]:
             auction_id = str(r[0])
             fish_name = r[1] or ""
             initial_price = float(r[2] or 0)
-            auction_type = r[3] or "open_box"
-            start_time = r[4]
-            delivered_quantity = float(r[5] or 0.0)
-            delivery_status = (r[6] or "pending").strip().lower()
-            delivered_at = r[7]
-            boat_number = r[8]
-            harbor_name = r[9]
-            port_name = r[10]
+            sale = float(r[3]) if r[3] is not None else None
+            auction_type = r[4] or "open_box"
+            start_time = r[5]
+            delivered_quantity = float(r[6] or 0.0)
+            delivery_status = (r[7] or "pending").strip().lower()
+            delivered_at = r[8]
+            boat_number = r[9]
+            harbor_name = r[10]
+            port_name = r[11]
 
             cur.execute(
                 """
@@ -104,6 +106,7 @@ def list_deliveries(buyer_id: str) -> List[Dict[str, Any]]:
                 "my_bid": my_bid,
                 "required_quantity": required_quantity,
                 "delivered_quantity": delivered_quantity,
+                "sale": sale,
                 "delivery_status": "completed" if delivery_status == "completed" else "pending",
                 "delivered_at": delivered_at,
             })
@@ -131,6 +134,7 @@ def get_delivery_detail(delivery_id: str, buyer_id: str) -> Optional[Dict[str, A
                 a.id,
                 a.fish_name,
                 a.initial_price,
+                a.sale,
                 a.auction_type,
                 a.start_time,
                 a.delivered_quantity,
@@ -154,14 +158,15 @@ def get_delivery_detail(delivery_id: str, buyer_id: str) -> Optional[Dict[str, A
         auction_id = str(r[0])
         fish_name = r[1] or ""
         initial_price = float(r[2] or 0)
-        auction_type = r[3] or "open_box"
-        start_time = r[4]
-        delivered_quantity = float(r[5] or 0.0)
-        delivery_status = (r[6] or "pending").strip().lower()
-        delivered_at = r[7]
-        boat_number = r[8]
-        harbor_name = r[9]
-        port_name = r[10]
+        sale = float(r[3]) if r[3] is not None else None
+        auction_type = r[4] or "open_box"
+        start_time = r[5]
+        delivered_quantity = float(r[6] or 0.0)
+        delivery_status = (r[7] or "pending").strip().lower()
+        delivered_at = r[8]
+        boat_number = r[9]
+        harbor_name = r[10]
+        port_name = r[11]
 
         cur.execute(
             """
@@ -195,6 +200,7 @@ def get_delivery_detail(delivery_id: str, buyer_id: str) -> Optional[Dict[str, A
             "my_bid": my_bid,
             "required_quantity": required_quantity,
             "delivered_quantity": delivered_quantity,
+            "sale": sale,
             "delivery_status": "completed" if delivery_status == "completed" else "pending",
             "delivered_at": delivered_at,
             "buyer_name": buyer_name,
