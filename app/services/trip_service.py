@@ -122,6 +122,144 @@ def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+def get_boat_trip_statuses(boat_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """
+    Batch version of get_boat_trip_status.
+
+    Returns a mapping: boat_id -> status dict (same shape as get_boat_trip_status result).
+    Missing/unknown boats are simply omitted.
+    """
+    ids = [str(bid) for bid in (boat_ids or []) if bid]
+    if not ids:
+        return {}
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            WITH selected_boats AS (
+                SELECT b.id, b.boat_number, b.boat_type, b.harbor_name
+                FROM boats b
+                WHERE b.id = ANY(%s)
+                  AND b.deleted_at IS NULL
+            )
+            SELECT
+                sb.id AS boat_id,
+                sb.boat_number,
+                sb.boat_type,
+                sb.harbor_name,
+                lm.id AS movement_id,
+                lm.movement_type,
+                lm.movement_at,
+                lm.port_name,
+                lm.crew_count,
+                lm.image_url,
+                lm.departure_at
+            FROM selected_boats sb
+            LEFT JOIN LATERAL (
+                SELECT id, movement_type, movement_at, port_name, crew_count, image_url, departure_at
+                FROM boat_movements
+                WHERE boat_id = sb.id
+                ORDER BY movement_at DESC
+                LIMIT 1
+            ) lm ON TRUE
+            """,
+            (ids,),
+        )
+        rows = cur.fetchall()
+
+        out: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            (
+                boat_id_val,
+                boat_number,
+                boat_type,
+                harbor_name,
+                latest_id,
+                latest_type,
+                latest_at,
+                port_name,
+                crew_count,
+                image_url,
+                departure_at,
+            ) = r
+
+            boat_id_str = str(boat_id_val)
+
+            if not latest_id:
+                out[boat_id_str] = {
+                    "boat_id": boat_id_str,
+                    "boat_number": boat_number or "",
+                    "trip_status": "docked",
+                    "movement_type": None,
+                    "departure_details": None,
+                    "has_open_departure": False,
+                    "last_movement_at": None,
+                    "latest_movement_id": None,
+                }
+                continue
+
+            if latest_type in ("departure", "temporary_departure"):
+                trip_status = "sailing"
+                departure_details = {
+                    "departure_at": latest_at,
+                    "from_port": port_name or harbor_name or "Unknown",
+                    "vessel_type": boat_type,
+                    "crew_count": crew_count,
+                    "status_label": "Sailing",
+                    "image_url": image_url,
+                }
+                has_open = True
+            elif latest_type == "temporary_arrival":
+                trip_status = "temporary_arrived"
+                dep_at = departure_at or latest_at
+                departure_details = {
+                    "departure_at": dep_at,
+                    "from_port": port_name or harbor_name or "Unknown",
+                    "vessel_type": boat_type,
+                    "crew_count": crew_count,
+                    "status_label": "Sailing",
+                    "image_url": image_url,
+                }
+                has_open = False
+            elif latest_type == "arrival":
+                trip_status = "arrived"
+                departure_details = None
+                has_open = False
+            elif latest_type == "partial_arrival":
+                trip_status = "partial_arrival"
+                departure_details = None
+                has_open = False
+            else:
+                trip_status = "docked"
+                departure_details = None
+                has_open = False
+
+            result: Dict[str, Any] = {
+                "boat_id": boat_id_str,
+                "boat_number": boat_number or "",
+                "trip_status": trip_status,
+                "movement_type": latest_type,
+                "departure_details": departure_details,
+                "has_open_departure": has_open,
+                "last_movement_at": latest_at,
+                "last_movement_image_url": image_url,
+                "latest_movement_id": str(latest_id) if latest_id else None,
+            }
+            if has_open and latest_id:
+                result["open_departure_movement_id"] = str(latest_id)
+            out[boat_id_str] = result
+
+        return out
+    except Exception as e:
+        print(f"Error fetching boat trip statuses: {e}")
+        return {}
+    finally:
+        cur.close()
+        conn.close()
+
+
 def get_movement_history(
     movement_type: str,
     date_filter: str,

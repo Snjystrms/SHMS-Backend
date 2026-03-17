@@ -211,8 +211,9 @@ async def boat_owner_verify_otp(req: BoatOwnerVerifyOtpRequest):
 async def list_my_boats(current_user: dict = Depends(deps.get_boat_owner_user)):
     """List boats belonging to the authenticated boat owner."""
     boats = crud_user.get_boats_by_owner_id(current_user["id"])
+    status_by_boat_id = trip_service.get_boat_trip_statuses([b.get("id") for b in boats])
     for boat in boats:
-        status_data = trip_service.get_boat_trip_status(boat["id"])
+        status_data = status_by_boat_id.get(boat["id"])
         trip_status = status_data["trip_status"] if status_data else "docked"
         boat["boat_status"] = "At sea" if trip_status == "sailing" else "At harbour"
         boat["latest_movement_id"] = status_data.get("latest_movement_id") if status_data else None
