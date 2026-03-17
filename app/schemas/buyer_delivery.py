@@ -1,6 +1,8 @@
 """Schemas for buyer deliveries (auctions won by the buyer)."""
 
+from datetime import datetime
 from typing import List
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -18,6 +20,9 @@ class DeliveryListItem(BaseModel):
     start_time: str
     my_bid: float
     required_quantity: float
+    delivered_quantity: float
+    delivery_status: str
+    delivered_at: Optional[datetime] = None
 
 
 class DeliveryListResponse(BaseModel):
@@ -39,5 +44,8 @@ class DeliveryDetail(BaseModel):
     start_time: str
     my_bid: float
     required_quantity: float
+    delivered_quantity: float
+    delivery_status: str
+    delivered_at: Optional[datetime] = None
     buyer_name: str
     qr_payload: str

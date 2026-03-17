@@ -54,6 +54,7 @@ def get_buyer_dashboard(buyer_id: str) -> Dict[str, Any]:
                     FROM auctions
                     WHERE winner_id = %s
                       AND status = 'completed'
+                      AND delivery_status = 'pending'
                 ), 0) AS pending_delivery
             """,
             (buyer_id, buyer_id),

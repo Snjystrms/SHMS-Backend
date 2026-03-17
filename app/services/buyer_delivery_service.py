@@ -49,6 +49,9 @@ def list_deliveries(buyer_id: str) -> List[Dict[str, Any]]:
                 a.initial_price,
                 a.auction_type,
                 a.start_time,
+                a.delivered_quantity,
+                a.delivery_status,
+                a.delivered_at,
                 b.boat_number,
                 b.harbor_name,
                 m.port_name
@@ -70,9 +73,12 @@ def list_deliveries(buyer_id: str) -> List[Dict[str, Any]]:
             initial_price = float(r[2] or 0)
             auction_type = r[3] or "open_box"
             start_time = r[4]
-            boat_number = r[5]
-            harbor_name = r[6]
-            port_name = r[7]
+            delivered_quantity = float(r[5] or 0.0)
+            delivery_status = (r[6] or "pending").strip().lower()
+            delivered_at = r[7]
+            boat_number = r[8]
+            harbor_name = r[9]
+            port_name = r[10]
 
             cur.execute(
                 """
@@ -90,13 +96,16 @@ def list_deliveries(buyer_id: str) -> List[Dict[str, Any]]:
                 "delivery_id": auction_id,
                 "auction_identifier": _auction_identifier(auction_id, boat_number),
                 "location": _get_location(port_name, harbor_name),
-                "status": "Win",
+                "status": "Completed Delivery" if delivery_status == "completed" else "Pending Delivery",
                 "fish_type": fish_name,
                 "bid_price": initial_price,
                 "auction_type": _auction_type_display(auction_type),
                 "start_time": _format_start_time(start_time),
                 "my_bid": my_bid,
                 "required_quantity": required_quantity,
+                "delivered_quantity": delivered_quantity,
+                "delivery_status": "completed" if delivery_status == "completed" else "pending",
+                "delivered_at": delivered_at,
             })
 
         return deliveries
@@ -124,6 +133,9 @@ def get_delivery_detail(delivery_id: str, buyer_id: str) -> Optional[Dict[str, A
                 a.initial_price,
                 a.auction_type,
                 a.start_time,
+                a.delivered_quantity,
+                a.delivery_status,
+                a.delivered_at,
                 b.boat_number,
                 b.harbor_name,
                 m.port_name
@@ -144,9 +156,12 @@ def get_delivery_detail(delivery_id: str, buyer_id: str) -> Optional[Dict[str, A
         initial_price = float(r[2] or 0)
         auction_type = r[3] or "open_box"
         start_time = r[4]
-        boat_number = r[5]
-        harbor_name = r[6]
-        port_name = r[7]
+        delivered_quantity = float(r[5] or 0.0)
+        delivery_status = (r[6] or "pending").strip().lower()
+        delivered_at = r[7]
+        boat_number = r[8]
+        harbor_name = r[9]
+        port_name = r[10]
 
         cur.execute(
             """
@@ -172,13 +187,16 @@ def get_delivery_detail(delivery_id: str, buyer_id: str) -> Optional[Dict[str, A
             "delivery_id": auction_id,
             "auction_identifier": _auction_identifier(auction_id, boat_number),
             "location": _get_location(port_name, harbor_name),
-            "status": "Win",
+            "status": "Completed Delivery" if delivery_status == "completed" else "Pending Delivery",
             "fish_type": fish_name,
             "bid_price": initial_price,
             "auction_type": _auction_type_display(auction_type),
             "start_time": _format_start_time(start_time),
             "my_bid": my_bid,
             "required_quantity": required_quantity,
+            "delivered_quantity": delivered_quantity,
+            "delivery_status": "completed" if delivery_status == "completed" else "pending",
+            "delivered_at": delivered_at,
             "buyer_name": buyer_name,
             "qr_payload": qr_payload,
         }

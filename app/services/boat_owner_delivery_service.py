@@ -47,6 +47,9 @@ def get_delivery_by_qr(
                 a.auction_type,
                 a.start_time,
                 a.delivered_quantity,
+                a.delivery_status,
+                a.delivered_at,
+                a.delivery_recorded_by,
                 b.boat_number
             FROM auctions a
             LEFT JOIN boat_movements m ON m.id = a.movement_id
@@ -69,7 +72,10 @@ def get_delivery_by_qr(
         auction_type = r[3] or "open_box"
         start_time = r[4]
         delivered_quantity = float(r[5] or 0)
-        boat_number = r[6]
+        delivery_status = (r[6] or "pending").strip().lower()
+        delivered_at = r[7]
+        delivery_recorded_by = str(r[8]) if r[8] else None
+        boat_number = r[9]
 
         cur.execute(
             """
@@ -93,6 +99,9 @@ def get_delivery_by_qr(
             "auction_type": _auction_type_display(auction_type),
             "requested_quantity": required_quantity,
             "delivered_quantity": delivered_quantity,
+            "delivery_status": "completed" if delivery_status == "completed" else "pending",
+            "delivered_at": delivered_at,
+            "delivery_recorded_by": delivery_recorded_by,
             "fish_type": fish_name,
             "start_time": _format_start_time(start_time),
             "auction_identifier": _auction_identifier(auction_id_str, boat_number),
@@ -130,6 +139,9 @@ def get_initiate_delivery_for_auction(
                 a.auction_type,
                 a.start_time,
                 a.delivered_quantity,
+                a.delivery_status,
+                a.delivered_at,
+                a.delivery_recorded_by,
                 b.boat_number
             FROM auctions a
             LEFT JOIN boat_movements m ON m.id = a.movement_id
@@ -156,7 +168,10 @@ def get_initiate_delivery_for_auction(
         auction_type = r[4] or "open_box"
         start_time = r[5]
         delivered_quantity = float(r[6] or 0)
-        boat_number = r[7]
+        delivery_status = (r[7] or "pending").strip().lower()
+        delivered_at = r[8]
+        delivery_recorded_by = str(r[9]) if r[9] else None
+        boat_number = r[10]
 
         cur.execute(
             """
@@ -180,6 +195,9 @@ def get_initiate_delivery_for_auction(
             "auction_type": _auction_type_display(auction_type),
             "requested_quantity": requested_quantity,
             "delivered_quantity": delivered_quantity,
+            "delivery_status": "completed" if delivery_status == "completed" else "pending",
+            "delivered_at": delivered_at,
+            "delivery_recorded_by": delivery_recorded_by,
             "fish_type": fish_name,
             "start_time": _format_start_time(start_time),
             "auction_identifier": _auction_identifier(auction_id_str, boat_number),
@@ -216,6 +234,9 @@ def get_initiate_delivery_for_auction_by_agent(
                 a.auction_type,
                 a.start_time,
                 a.delivered_quantity,
+                a.delivery_status,
+                a.delivered_at,
+                a.delivery_recorded_by,
                 b.boat_number
             FROM auctions a
             JOIN bidding_requests br ON br.id = a.bidding_request_id
@@ -239,7 +260,10 @@ def get_initiate_delivery_for_auction_by_agent(
         auction_type = r[3] or "open_box"
         start_time = r[4]
         delivered_quantity = float(r[5] or 0)
-        boat_number = r[6]
+        delivery_status = (r[6] or "pending").strip().lower()
+        delivered_at = r[7]
+        delivery_recorded_by = str(r[8]) if r[8] else None
+        boat_number = r[9]
 
         cur.execute(
             """
@@ -263,6 +287,9 @@ def get_initiate_delivery_for_auction_by_agent(
             "auction_type": _auction_type_display(auction_type),
             "requested_quantity": requested_quantity,
             "delivered_quantity": delivered_quantity,
+            "delivery_status": "completed" if delivery_status == "completed" else "pending",
+            "delivered_at": delivered_at,
+            "delivery_recorded_by": delivery_recorded_by,
             "fish_type": fish_name,
             "start_time": _format_start_time(start_time),
             "auction_identifier": _auction_identifier(auction_id_str, boat_number),
@@ -294,7 +321,7 @@ def record_delivery(
     try:
         cur.execute(
             """
-            SELECT a.id, a.seller_id, a.winner_id, a.delivered_quantity
+            SELECT a.id, a.seller_id, a.winner_id, a.delivered_quantity, a.delivery_status
             FROM auctions a
             WHERE a.id = %s AND a.status = 'completed'
             """,
@@ -307,11 +334,12 @@ def record_delivery(
         seller_id = str(r[1]) if r[1] else None
         winner_id = str(r[2]) if r[2] else None
         existing_delivered = float(r[3] or 0)
+        existing_status = (r[4] or "pending").strip().lower()
 
         if seller_id != owner_id:
             return False, "Auction does not belong to you"
 
-        if existing_delivered > 0:
+        if existing_delivered > 0 or existing_status == "completed":
             return False, "Delivery already recorded"
 
         if not winner_id:
@@ -331,13 +359,18 @@ def record_delivery(
         if required_quantity > 0 and delivered_quantity > required_quantity:
             return False, f"Delivered quantity cannot exceed requested quantity ({required_quantity} KG)"
 
+        new_status = "completed" if required_quantity > 0 and delivered_quantity >= required_quantity else "pending"
         cur.execute(
             """
             UPDATE auctions
-            SET delivered_quantity = %s, updated_at = NOW()
+            SET delivered_quantity = %s,
+                delivery_status = %s,
+                delivered_at = NOW(),
+                delivery_recorded_by = %s,
+                updated_at = NOW()
             WHERE id = %s AND seller_id = %s
             """,
-            (delivered_quantity, aid, owner_id),
+            (delivered_quantity, new_status, owner_id, aid, owner_id),
         )
         conn.commit()
         if cur.rowcount == 0:
@@ -482,6 +515,9 @@ def get_deliveries_for_boat_owner(
                 a.auction_type,
                 a.start_time,
                 a.delivered_quantity,
+                a.delivery_status,
+                a.delivered_at,
+                a.delivery_recorded_by,
                 b.boat_number
             FROM auctions a
             LEFT JOIN boat_movements m ON m.id = a.movement_id
@@ -489,9 +525,10 @@ def get_deliveries_for_boat_owner(
             LEFT JOIN boats b ON b.id = COALESCE(m.boat_id, br.boat_id) AND b.deleted_at IS NULL
             WHERE a.seller_id = %s
               AND a.status = 'completed'
+              AND a.delivery_status = %s
             ORDER BY a.start_time DESC
             """,
-            (owner_id,),
+            (owner_id, status_filter),
         )
         rows = cur.fetchall() or []
 
@@ -505,7 +542,10 @@ def get_deliveries_for_boat_owner(
             auction_type = r[4] or "open_box"
             start_time = r[5]
             delivered_quantity = float(r[6] or 0)
-            boat_number = r[7]
+            delivery_status = (r[7] or "pending").strip().lower()
+            delivered_at = r[8]
+            delivery_recorded_by = str(r[9]) if r[9] else None
+            boat_number = r[10]
 
             if seller_id != owner_id:
                 continue
@@ -532,11 +572,7 @@ def get_deliveries_for_boat_owner(
             if requested_quantity <= 0:
                 continue
 
-            is_completed_delivery = delivered_quantity >= requested_quantity
-            if status_filter == "pending" and is_completed_delivery:
-                continue
-            if status_filter == "completed" and not is_completed_delivery:
-                continue
+            is_completed_delivery = delivery_status == "completed"
 
             items.append(
                 {
@@ -547,6 +583,9 @@ def get_deliveries_for_boat_owner(
                     "bid_price": bid_price,
                     "requested_quantity": requested_quantity,
                     "delivered_quantity": delivered_quantity,
+                    "delivery_status": "completed" if is_completed_delivery else "pending",
+                    "delivered_at": delivered_at,
+                    "delivery_recorded_by": delivery_recorded_by,
                     "start_time": _format_start_time(start_time),
                     "status": "Completed Delivery" if is_completed_delivery else "Pending Delivery",
                 }
@@ -591,15 +630,19 @@ def get_deliveries_for_agent(
                 a.auction_type,
                 a.start_time,
                 a.delivered_quantity,
+                a.delivery_status,
+                a.delivered_at,
+                a.delivery_recorded_by,
                 b.boat_number
             FROM auctions a
             JOIN bidding_requests br ON br.id = a.bidding_request_id
             LEFT JOIN boats b ON b.id = br.boat_id AND b.deleted_at IS NULL
             WHERE a.status = 'completed'
               AND br.agent_id = %s
+              AND a.delivery_status = %s
             ORDER BY a.start_time DESC
             """,
-            (agid,),
+            (agid, status_filter),
         )
         rows = cur.fetchall() or []
 
@@ -612,7 +655,10 @@ def get_deliveries_for_agent(
             auction_type = r[3] or "open_box"
             start_time = r[4]
             delivered_quantity = float(r[5] or 0)
-            boat_number = r[6]
+            delivery_status = (r[6] or "pending").strip().lower()
+            delivered_at = r[7]
+            delivery_recorded_by = str(r[8]) if r[8] else None
+            boat_number = r[9]
 
             if not winner_id:
                 continue
@@ -637,11 +683,7 @@ def get_deliveries_for_agent(
             if requested_quantity <= 0:
                 continue
 
-            is_completed_delivery = delivered_quantity >= requested_quantity
-            if status_filter == "pending" and is_completed_delivery:
-                continue
-            if status_filter == "completed" and not is_completed_delivery:
-                continue
+            is_completed_delivery = delivery_status == "completed"
 
             items.append(
                 {
@@ -652,6 +694,9 @@ def get_deliveries_for_agent(
                     "bid_price": bid_price,
                     "requested_quantity": requested_quantity,
                     "delivered_quantity": delivered_quantity,
+                    "delivery_status": "completed" if is_completed_delivery else "pending",
+                    "delivered_at": delivered_at,
+                    "delivery_recorded_by": delivery_recorded_by,
                     "start_time": _format_start_time(start_time),
                     "status": "Completed Delivery" if is_completed_delivery else "Pending Delivery",
                 }

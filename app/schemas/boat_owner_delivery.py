@@ -1,5 +1,6 @@
 """Schemas for boat owner delivery (scan QR and record delivery)."""
 
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -22,6 +23,9 @@ class ScanDeliveryResponse(BaseModel):
     auction_type: str
     requested_quantity: float
     delivered_quantity: float
+    delivery_status: str
+    delivered_at: Optional[datetime] = None
+    delivery_recorded_by: Optional[str] = None
     fish_type: str
     start_time: str
     auction_identifier: str
@@ -37,6 +41,9 @@ class InitiateDeliveryResponse(BaseModel):
     auction_type: str
     requested_quantity: float
     delivered_quantity: float
+    delivery_status: str
+    delivered_at: Optional[datetime] = None
+    delivery_recorded_by: Optional[str] = None
     fish_type: str
     start_time: str
     auction_identifier: str
@@ -66,5 +73,8 @@ class PendingDeliveryItem(BaseModel):
     bid_price: float
     requested_quantity: float
     delivered_quantity: float
+    delivery_status: str
+    delivered_at: Optional[datetime] = None
+    delivery_recorded_by: Optional[str] = None
     start_time: str
     status: str

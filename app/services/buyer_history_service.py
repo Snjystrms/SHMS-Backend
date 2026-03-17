@@ -108,13 +108,17 @@ def list_delivery_history(buyer_id: str) -> List[Dict[str, Any]]:
                 a.id,
                 a.fish_name,
                 a.delivered_quantity,
+                a.delivery_status,
+                a.delivered_at,
                 b.boat_number,
                 b.boat_name
             FROM auctions a
             LEFT JOIN boat_movements m ON m.id = a.movement_id
             LEFT JOIN bidding_requests br ON br.id = a.bidding_request_id
             LEFT JOIN boats b ON b.id = COALESCE(m.boat_id, br.boat_id) AND b.deleted_at IS NULL
-            WHERE a.winner_id = %s AND a.status = 'completed'
+            WHERE a.winner_id = %s
+              AND a.status = 'completed'
+              AND a.delivery_status = 'completed'
             ORDER BY a.start_time DESC
             """,
             (user_id,),
@@ -126,8 +130,10 @@ def list_delivery_history(buyer_id: str) -> List[Dict[str, Any]]:
             auction_id = str(r[0])
             fish_name = r[1] or ""
             delivered_quantity = float(r[2] or 0)
-            boat_number = r[3]
-            boat_name = r[4] or ""
+            delivery_status = (r[3] or "").strip().lower() or "completed"
+            delivered_at = r[4]
+            boat_number = r[5]
+            boat_name = r[6] or ""
 
             cur.execute(
                 """
@@ -149,6 +155,8 @@ def list_delivery_history(buyer_id: str) -> List[Dict[str, Any]]:
                 "my_bid": my_bid,
                 "required_quantity": required_quantity,
                 "delivered_quantity": delivered_quantity,
+                "delivery_status": delivery_status,
+                "delivered_at": delivered_at,
             })
 
         return deliveries

@@ -10,6 +10,7 @@ from app.services import user_service as crud_user
 from app.services import trip_service, notification_service
 from app.services import bidding_service
 from app.services import boat_owner_delivery_service
+from app.services import auction_service
 from app.services.otp_registration_service import (
     start_temp_user_registration,
     verify_otp_and_login_with_role,
@@ -29,6 +30,7 @@ from app.schemas.bidding import (
     BiddingRequestListResponse,
 )
 from app.schemas.boat_owner_delivery import PendingDeliveryItem
+from app.schemas.agent_auction import AgentAuctionListItem
 
 
 router = APIRouter()
@@ -220,4 +222,28 @@ async def list_agent_deliveries(
         status_filter=status_value,
     )
     return items
+
+
+@router.get(
+    "/auctions",
+    response_model=list[AgentAuctionListItem],
+)
+async def list_agent_auctions(
+    status_filter: Optional[str] = Query("active", alias="status"),
+    current_user: dict = Depends(deps.get_agent_user),
+):
+    """
+    Agent auctions list for app tabs.
+    Query param: ?status=active|completed
+    """
+    status_value = (status_filter or "active").strip().lower()
+    if status_value not in {"active", "completed"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid status. Allowed values: active, completed",
+        )
+    return auction_service.list_agent_auction_cards(
+        agent_id=current_user["id"],
+        status=status_value,
+    )
 

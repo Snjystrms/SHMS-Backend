@@ -1,6 +1,8 @@
 """Schemas for buyer history (auction history and delivery history)."""
 
+from datetime import datetime
 from typing import List
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -36,6 +38,8 @@ class DeliveryHistoryItem(BaseModel):
     my_bid: float
     required_quantity: float
     delivered_quantity: float
+    delivery_status: Optional[str] = None
+    delivered_at: Optional[datetime] = None
 
 
 class DeliveryHistoryResponse(BaseModel):
