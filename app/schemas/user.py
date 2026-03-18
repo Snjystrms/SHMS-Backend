@@ -84,6 +84,19 @@ class ResetPasswordRequest(BaseModel):
     confirm_password: str
 
 
+class PortOfficerVerifyOtpRequest(BaseModel):
+    """Request body for port officer OTP verification (forgot-password step 2)."""
+    mobile_number: str
+    otp: str
+
+
+class PortOfficerResetPasswordRequest(BaseModel):
+    """Request body for port officer password reset after OTP verification."""
+    reset_token: str
+    new_password: str
+    confirm_password: str
+
+
 class BoatOwnerVerifyOtpRequest(BaseModel):
     """Request body for boat owner OTP verification (login)."""
     mobile_number: str

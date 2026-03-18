@@ -5,9 +5,17 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request
 from app.api import deps
+from app.core import security
 from app.core.config import settings
 from app.services import user_service, trip_service, face_service, notification_service, boat_scan_service
-from app.schemas.user import BoatIdentifyResponse, PendingBoatRegisterRequest, BoatScanResponse
+from app.schemas.user import (
+    BoatIdentifyResponse,
+    PendingBoatRegisterRequest,
+    BoatScanResponse,
+    ForgotPasswordRequest,
+    PortOfficerVerifyOtpRequest,
+    PortOfficerResetPasswordRequest,
+)
 from app.schemas.crew import (
     CrewScannedHistoryResponse,
     CrewScannedHistoryItem,
@@ -39,6 +47,7 @@ from app.schemas.dashboard import (
     TodayActivity,
 )
 from app.utils.sms import get_sms_provider
+from app.utils.otp_helpers import send_otp_for_phone
 from app.utils.uploads import save_crew_scan_image
 from app.utils.url_helpers import resolve_image_url
 
@@ -80,6 +89,73 @@ def _get_sms():
 
 
 router = APIRouter()
+
+
+@router.post("/forgot-password")
+async def port_officer_forgot_password(req: ForgotPasswordRequest):
+    return send_otp_for_phone(
+        req.mobile_number.strip(),
+        user_service.get_officer_by_phone,
+        "No port officer found with this mobile number",
+    )
+
+
+@router.post("/verify-otp")
+async def port_officer_verify_otp(req: PortOfficerVerifyOtpRequest):
+    """
+    Step 2 (Port Officer Forgot Password):
+    Verify OTP for the given mobile number and return a short-lived reset token.
+    """
+    phone = (req.mobile_number or "").strip()
+    otp = (req.otp or "").strip()
+    if not phone:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="mobile_number is required")
+    if not otp:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="otp is required")
+
+    officer = user_service.get_officer_by_phone(phone)
+    if not officer:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No port officer found with this mobile number",
+        )
+
+    # Consume OTP on verify so reset-password does not require otp again.
+    if not user_service.verify_otp(phone, otp):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP")
+
+    reset_token = security.create_password_reset_token(officer["id"])
+    return {"success": True, "message": "OTP verified", "reset_token": reset_token}
+
+
+@router.post("/reset-password")
+async def port_officer_reset_password(req: PortOfficerResetPasswordRequest):
+    """
+    Step 3 (Port Officer Forgot Password):
+    Set new password using reset_token from verify-otp.
+    """
+    if req.new_password != req.confirm_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match")
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Minimum 6 characters required")
+
+    user_id = security.decode_password_reset_token((req.reset_token or "").strip())
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired reset token")
+
+    # Ensure token belongs to an officer user.
+    officer = user_service.get_user_by_id(user_id)
+    if not officer or officer.get("role") != "officer":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Port officer not found")
+
+    hashed = security.get_password_hash(req.new_password)
+    ok = user_service.update_user_password(officer["id"], hashed)
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update password",
+        )
+    return {"message": "Password reset successfully"}
 
 
 @router.get("/dashboard", response_model=PortOfficerDashboardResponse)

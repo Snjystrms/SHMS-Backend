@@ -39,6 +39,43 @@ def get_user_by_identifier(identifier: str):
         cur.close()
         conn.close()
 
+
+def get_admin_or_officer_by_identifier(identifier: str):
+    """Fetch admin/officer user by email or phone (used for password-based login)."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT u.id, u.name, u.email, u.password, u.role_id, r.name as role_name
+            FROM users u
+            JOIN roles r ON u.role_id = r.id
+            WHERE (u.email = %s OR u.phone = %s)
+              AND r.name IN ('admin', 'officer')
+              AND u.deleted_at IS NULL
+            ORDER BY CASE WHEN r.name = 'admin' THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (identifier, identifier),
+        )
+        row = cur.fetchone()
+        if row:
+            return {
+                "id": str(row[0]),
+                "name": row[1],
+                "email": row[2],
+                "password": row[3],
+                "role_id": row[4],
+                "role": row[5],
+            }
+        return None
+    except Exception as e:
+        print(f"Error fetching admin/officer by identifier: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
 def update_user_password(user_id: str, hashed_password: str):
     """Update a user's password with a new hash."""
     conn = get_db_connection()

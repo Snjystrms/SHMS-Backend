@@ -6,7 +6,7 @@ from app.core import security
 from app.core.config import settings
 from app.services import user_service as crud_user
 from app.schemas.token import Token
-from app.schemas.user import ForgotPasswordRequest, ResendOtpRequest, ResetPasswordRequest
+from app.schemas.user import ResendOtpRequest
 from app.utils.sms import get_sms_provider
 
 router = APIRouter()
@@ -84,7 +84,10 @@ class LoginRequestForm:
 @router.post("/login", response_model=Token)
 async def login(form_data: LoginRequestForm = Depends()):
     """Login endpoint - accepts mobile number only."""
-    user = crud_user.get_user_by_identifier(form_data.mobile_number)
+    identifier = (form_data.mobile_number or "").strip()
+    # Password-based login is intended for admin/officer users.
+    # If another role shares the same phone, prefer admin/officer records.
+    user = crud_user.get_admin_or_officer_by_identifier(identifier)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -113,9 +116,9 @@ async def login(form_data: LoginRequestForm = Depends()):
     return _token_response(user)
 
 
-@router.post("/forgot-password")
-async def forgot_password(req: ForgotPasswordRequest):
-    """Send OTP to port officer's mobile. Officer-only."""
+@router.post("/resend-otp")
+async def resend_otp(req: ResendOtpRequest):
+    """Resend OTP to port officer's mobile."""
     return _send_otp_for_phone(
         req.mobile_number.strip(),
         crud_user.get_officer_by_phone,
@@ -123,25 +126,4 @@ async def forgot_password(req: ForgotPasswordRequest):
     )
 
 
-@router.post("/resend-otp")
-async def resend_otp(req: ResendOtpRequest):
-    """Resend OTP to port officer's mobile. Same body as forgot-password (mobile_number)."""
-    return await forgot_password(ForgotPasswordRequest(mobile_number=req.mobile_number))
-
-
-@router.post("/reset-password")
-async def reset_password(req: ResetPasswordRequest):
-    """Verify OTP and set new password. Officer-only."""
-    phone = req.mobile_number.strip()
-    if req.new_password != req.confirm_password:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match")
-    if len(req.new_password) < 6:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Minimum 6 characters required")
-    officer = crud_user.get_officer_by_phone(phone)
-    if not officer:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No port officer found with this mobile number")
-    if not crud_user.verify_otp(phone, req.otp):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired OTP")
-    hashed = security.get_password_hash(req.new_password)
-    crud_user.update_user_password(officer["id"], hashed)
-    return {"message": "Password reset successfully"}
+## NOTE: /reset-password endpoint removed (use role-specific reset flows).
