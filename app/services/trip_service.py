@@ -141,7 +141,7 @@ def get_boat_trip_statuses(boat_ids: List[str]) -> Dict[str, Dict[str, Any]]:
             WITH selected_boats AS (
                 SELECT b.id, b.boat_number, b.boat_type, b.harbor_name
                 FROM boats b
-                WHERE b.id = ANY(%s)
+                WHERE b.id::text = ANY(%s)
                   AND b.deleted_at IS NULL
             )
             SELECT
