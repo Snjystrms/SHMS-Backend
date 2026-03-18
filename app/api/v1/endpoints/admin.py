@@ -11,8 +11,14 @@ from app.schemas.crew import (
     CrewHistoryDateFilter,
 )
 from app.schemas.agent_auction import AgentAuctionListItem
+from app.schemas.admin_buyers import AdminBuyerListItem, AdminBuyerListResponse
+from app.schemas.buyer_delivery import DeliveryListItem
+from app.services import admin_delivery_service
 
 router = APIRouter()
+
+PAGE_MIN_DETAIL = "page must be >= 1"
+PAGE_SIZE_MIN_DETAIL = "page_size must be >= 1"
 
 # ==================== Notifications ====================
 
@@ -43,12 +49,12 @@ async def list_agents(
     if page < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="page must be >= 1",
+            detail=PAGE_MIN_DETAIL,
         )
     if page_size < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="page_size must be >= 1",
+            detail=PAGE_SIZE_MIN_DETAIL,
         )
     if page_size > 200:
         page_size = 200
@@ -66,6 +72,72 @@ async def list_agents(
         "total": total,
         "agents": agents,
     }
+
+
+@router.get("/buyers", response_model=AdminBuyerListResponse)
+async def list_buyers(
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+    current_admin: dict = Depends(deps.get_admin_user),
+):
+    """
+    Admin-only: List buyers with pagination and optional search by name/phone.
+    """
+    if page < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=PAGE_MIN_DETAIL,
+        )
+    if page_size < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=PAGE_SIZE_MIN_DETAIL,
+        )
+    if page_size > 200:
+        page_size = 200
+
+    offset = (page - 1) * page_size
+    buyers, total = crud_user.get_buyers_paginated(
+        search=search,
+        limit=page_size,
+        offset=offset,
+    )
+    return AdminBuyerListResponse(
+        success=True,
+        page=page,
+        page_size=page_size,
+        total=total,
+        buyers=[AdminBuyerListItem(**b) for b in buyers],
+    )
+
+
+@router.get(
+    "/buyers/{buyer_id}/deliveries",
+    response_model=list[DeliveryListItem],
+)
+async def list_deliveries_for_buyer_admin(
+    buyer_id: str,
+    status_filter: Optional[str] = Query("pending", alias="status"),
+    current_admin: dict = Depends(deps.get_admin_user),
+):
+    """
+    Admin-only: list deliveries for a buyer filtered by delivery status.
+    Query param: ?status=pending|completed
+    """
+    status_value = (status_filter or "pending").strip().lower()
+    if status_value not in {"pending", "completed"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid status. Allowed values: pending, completed",
+        )
+
+    deliveries = admin_delivery_service.list_buyer_deliveries_for_admin(
+        buyer_id=buyer_id,
+        status_filter=status_value,
+    )
+    return [DeliveryListItem(**d) for d in deliveries]
+
 
 
 @router.post("/officers", status_code=status.HTTP_201_CREATED)
