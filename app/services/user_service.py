@@ -206,6 +206,72 @@ def get_boat_owners():
         conn.close()
 
 
+def get_agents_paginated(
+    search: Optional[str],
+    limit: int,
+    offset: int,
+) -> Tuple[list[Dict[str, Any]], int]:
+    """
+    Fetch agents with pagination and optional search on name/phone.
+    Returns (agents_list, total_count).
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        where_clauses = [
+            "r.name = 'agent'",
+            "u.deleted_at IS NULL",
+        ]
+        list_params: list[Any] = []
+        count_params: list[Any] = []
+
+        if search and str(search).strip():
+            like = f"%{search.strip()}%"
+            where_clauses.append("(LOWER(u.name) LIKE LOWER(%s) OR u.phone LIKE %s)")
+            list_params.extend([like, like])
+            count_params.extend([like, like])
+
+        where_sql = " AND ".join(where_clauses)
+
+        # Total count
+        count_sql = f"""
+            SELECT COUNT(*)
+            FROM users u
+            JOIN roles r ON u.role_id = r.id
+            WHERE {where_sql}
+        """
+        cur.execute(count_sql, tuple(count_params))
+        total_row = cur.fetchone()
+        total = int(total_row[0] if total_row and total_row[0] is not None else 0)
+
+        # Paged list
+        list_sql = f"""
+            SELECT u.id, u.name, u.email, u.phone
+            FROM users u
+            JOIN roles r ON u.role_id = r.id
+            WHERE {where_sql}
+            ORDER BY u.created_at DESC
+            LIMIT %s OFFSET %s
+        """
+        cur.execute(list_sql, tuple(list_params + [limit, offset]))
+        rows = cur.fetchall()
+        agents = [
+            {
+                "id": str(r[0]),
+                "name": r[1],
+                "email": r[2],
+                "phone": r[3],
+            }
+            for r in rows
+        ]
+        return agents, total
+    except Exception as e:
+        print(f"Error fetching agents (paginated): {e}")
+        return [], 0
+    finally:
+        cur.close()
+        conn.close()
+
 def get_agent_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     """Fetch agent by phone. Returns None if not found or not agent role."""
     conn = get_db_connection()

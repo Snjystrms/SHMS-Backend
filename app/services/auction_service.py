@@ -595,6 +595,114 @@ def list_agent_auction_cards(agent_id: str, status: str) -> List[Dict[str, Any]]
         conn.close()
 
 
+def list_agent_auction_cards_for_admin(
+    agent_id: str,
+    status: str,
+) -> List[Dict[str, Any]]:
+    """
+    Admin UI-ready auctions list for a given agent.
+
+    Filters by status in {"pending", "completed"}:
+    - pending => scheduled + active auctions
+    - completed => completed auctions
+    """
+    status_value = (status or "pending").strip().lower()
+    if status_value not in {"pending", "completed"}:
+        return []
+    status_values = ["completed"] if status_value == "completed" else ["scheduled", "active"]
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Lazily update status only for this agent's scheduled/active auctions.
+        cur.execute(
+            f"""
+            UPDATE auctions
+            SET status = CASE
+                    WHEN {_NOW_IST_SQL} >= end_time THEN 'completed'
+                    WHEN {_NOW_IST_SQL} >= start_time THEN 'active'
+                    ELSE auctions.status
+                END,
+                updated_at = NOW()
+            FROM bidding_requests br
+            WHERE auctions.bidding_request_id = br.id
+              AND br.agent_id = %s
+              AND auctions.status IN ('scheduled', 'active')
+            """,
+            (agent_id,),
+        )
+        conn.commit()
+
+        cur.execute(
+            """
+            SELECT
+                a.id,
+                a.fish_name,
+                a.current_price,
+                a.auction_type,
+                a.start_time,
+                a.status,
+                a.delivered_quantity,
+                b.boat_number,
+                b.boat_name,
+                u.name AS winner_name
+            FROM auctions a
+            JOIN bidding_requests br ON br.id = a.bidding_request_id
+            LEFT JOIN boat_movements m ON m.id = a.movement_id
+            LEFT JOIN boats b
+              ON b.id = COALESCE(m.boat_id, br.boat_id)
+             AND b.deleted_at IS NULL
+            LEFT JOIN users u ON u.id = a.winner_id
+            WHERE br.agent_id = %s
+              AND a.status = ANY(%s)
+            ORDER BY a.start_time DESC NULLS LAST, a.created_at DESC
+            """,
+            (agent_id, status_values),
+        )
+        rows = cur.fetchall()
+
+        results: List[Dict[str, Any]] = []
+        for r in rows:
+            auction_id = str(r[0])
+            fish_name = r[1] or ""
+            current_price = float(r[2] or 0.0)
+            auction_type = r[3] or "open_box"
+            start_time = r[4]
+            row_status = (r[5] or "").strip().lower()
+            delivered_quantity = float(r[6] or 0.0)
+            boat_number = r[7]
+            boat_name = (r[8] or "").strip()
+            winner_name = r[9]
+
+            is_completed = row_status == "completed"
+            start_time_display: Optional[str] = None
+            if not is_completed and start_time:
+                start_time_display = _format_start_time(start_time)
+            results.append(
+                {
+                    "auction_id": auction_id,
+                    "auction_identifier": _auction_identifier(auction_id, boat_number),
+                    "boat_name": boat_name or fish_name or "Auction",
+                    "status": "Completed" if is_completed else "Pending",
+                    "fish_type": (None if is_completed else fish_name),
+                    "bid_price": current_price,
+                    "auction_type": _auction_type_display(auction_type),
+                    "start_time": start_time_display,
+                    "winner_name": (winner_name if is_completed else None),
+                    "delivered_quantity": (delivered_quantity if is_completed else None),
+                }
+            )
+
+        return results
+    except Exception as e:
+        conn.rollback()
+        print(f"Error listing admin agent auction cards for agent {agent_id}: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
 def list_active_auctions() -> List[Dict[str, Any]]:
     """Return only currently active auctions (status='active')."""
     conn = get_db_connection()

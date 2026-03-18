@@ -1,5 +1,5 @@
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from app.services import user_service as crud_user, notification_service, trip_service
 from app.schemas.user import UserCreate, UserUpdate, BoatUpdate
 from app.api import deps
@@ -10,6 +10,7 @@ from app.schemas.crew import (
     CrewScannedHistoryItem,
     CrewHistoryDateFilter,
 )
+from app.schemas.agent_auction import AgentAuctionListItem
 
 router = APIRouter()
 
@@ -27,6 +28,44 @@ async def list_notifications(
         unread_only=unread_only,
     )
     return {"success": True, "notifications": notifications}
+
+
+@router.get("/agents")
+async def list_agents(
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+    current_admin: dict = Depends(deps.get_admin_user),
+):
+    """
+    Admin-only: List agents with pagination and optional search by name/phone.
+    """
+    if page < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="page must be >= 1",
+        )
+    if page_size < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="page_size must be >= 1",
+        )
+    if page_size > 200:
+        page_size = 200
+
+    offset = (page - 1) * page_size
+    agents, total = crud_user.get_agents_paginated(
+        search=search,
+        limit=page_size,
+        offset=offset,
+    )
+    return {
+        "success": True,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "agents": agents,
+    }
 
 
 @router.post("/officers", status_code=status.HTTP_201_CREATED)
@@ -352,6 +391,37 @@ async def get_officer_crew_history(
         date_filter=date_filter,
         total_records=len(records),
         records=records,
+    )
+
+
+@router.get(
+    "/agents/{agent_id}/auctions",
+    response_model=List[AgentAuctionListItem],
+)
+async def list_auctions_for_agent_admin(
+    agent_id: str,
+    status_filter: Optional[str] = Query("pending", alias="status"),
+    current_admin: dict = Depends(deps.get_admin_user),
+):
+    """
+    Admin: list auctions created by a specific agent.
+
+    Query param: ?status=pending|completed
+    - pending => scheduled + active
+    - completed => completed
+    """
+    status_value = (status_filter or "pending").strip().lower()
+    if status_value not in {"pending", "completed"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid status. Allowed values: pending, completed",
+        )
+
+    from app.services import auction_service
+
+    return auction_service.list_agent_auction_cards_for_admin(
+        agent_id=agent_id,
+        status=status_value,
     )
 
 
