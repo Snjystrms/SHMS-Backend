@@ -51,7 +51,7 @@ def test_port_officer_apis():
 
     # 2. Movement history (likely empty but should succeed)
     print("\n2. Fetching departure movement history (today)...")
-    params = {"movement_type": "departure", "date_filter": "today"}
+    params = {"movement_type": "departure", "date_filter": "today", "page": 1, "page_size": 10}
     response = requests.get(
         f"{BASE_URL}/port-officer/movements/history",
         headers=headers,
@@ -106,7 +106,7 @@ def test_port_officer_apis():
     # 5. Identify unknown boat number (should return 404)
     print("\n5. Trying to identify an unknown boat (expect 404)...")
     unknown_boat_number = f"UNKNOWN-{uuid.uuid4().hex[:6].upper()}"
-    response = requests.get(
+    response = requests.post(
         f"{BASE_URL}/port-officer/boats/identify/{unknown_boat_number}",
         headers=headers,
     )

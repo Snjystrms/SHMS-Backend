@@ -263,6 +263,8 @@ def get_boat_trip_statuses(boat_ids: List[str]) -> Dict[str, Dict[str, Any]]:
 def get_movement_history(
     movement_type: str,
     date_filter: str,
+    offset: int = 0,
+    limit: int = 10,
 ) -> List[Dict[str, Any]]:
     """
     Return list of movements filtered by type and date range.
@@ -289,6 +291,13 @@ def get_movement_history(
     }
     db_types = type_values.get(movement_type, (movement_type,))
 
+    offset_val = max(int(offset or 0), 0)
+    limit_val = int(limit or 10)
+    if limit_val < 1:
+        limit_val = 1
+    if limit_val > 200:
+        limit_val = 200
+
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -309,9 +318,10 @@ def get_movement_history(
             WHERE m.movement_type = ANY(%s)
               AND m.movement_at >= %s
             ORDER BY m.movement_at DESC
-            LIMIT 200
+            OFFSET %s
+            LIMIT %s
             """,
-            (list(db_types), start),
+            (list(db_types), start, offset_val, limit_val),
         )
         rows = cur.fetchall()
         return [

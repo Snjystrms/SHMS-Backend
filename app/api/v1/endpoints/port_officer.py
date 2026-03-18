@@ -330,6 +330,8 @@ async def get_movement_history(
     request: Request,
     movement_type: str,
     date_filter: HistoryDateFilter = "today",
+    page: int = 1,
+    page_size: int = 10,
     current_user: dict = Depends(deps.get_admin_or_officer_user),
 ):
     """
@@ -337,9 +339,25 @@ async def get_movement_history(
     Filters by movement_type (departure/arrival/partial_arrival) and date_filter
     (today, last_7_days, last_30_days).
     """
+    if page < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="page must be >= 1",
+        )
+    if page_size < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="page_size must be >= 1",
+        )
+    if page_size > 200:
+        page_size = 200
+
+    offset = (page - 1) * page_size
     records_raw = trip_service.get_movement_history(
         movement_type=movement_type,
         date_filter=date_filter,
+        offset=offset,
+        limit=page_size,
     )
     request_base = str(request.base_url)
     for r in records_raw:
