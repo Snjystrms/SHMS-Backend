@@ -7,6 +7,58 @@ from typing import Optional, List, Dict, Any, Tuple
 from app.schemas.user import UserCreate, UserUpdate
 from app.db.session import get_db_connection
 
+
+def get_admin_dashboard_role_counts() -> Dict[str, Any]:
+    """
+    Admin dashboard quick snapshot: counts of users by role (excluding admin).
+
+    Returns:
+      {
+        "counts": {"boat_owner": int, "officer": int, "agent": int, "buyer": int},
+        "updated_at": datetime
+      }
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    now = datetime.now(timezone.utc)
+    try:
+        cur.execute(
+            """
+            SELECT
+                r.name AS role_name,
+                COUNT(u.id) AS user_count
+            FROM roles r
+            LEFT JOIN users u
+              ON u.role_id = r.id
+             AND u.deleted_at IS NULL
+            WHERE r.deleted_at IS NULL
+              AND r.name <> 'admin'
+            GROUP BY r.name
+            """,
+        )
+        rows = cur.fetchall() or []
+
+        counts: Dict[str, int] = {
+            "boat_owner": 0,
+            "officer": 0,
+            "agent": 0,
+            "buyer": 0,
+        }
+        for role_name, user_count in rows:
+            if role_name in counts:
+                counts[role_name] = int(user_count or 0)
+
+        return {"counts": counts, "updated_at": now}
+    except Exception as e:
+        print(f"Error fetching admin dashboard role counts: {e}")
+        return {
+            "counts": {"boat_owner": 0, "officer": 0, "agent": 0, "buyer": 0},
+            "updated_at": now,
+        }
+    finally:
+        cur.close()
+        conn.close()
+
 def get_user_by_identifier(identifier: str):
     """Fetch a user by their email address or phone number."""
     conn = get_db_connection()

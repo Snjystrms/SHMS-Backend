@@ -289,6 +289,159 @@ def test_port_officer_create_boat_movement_success(client, monkeypatch):
     assert created["count"] == 2
 
 
+def test_port_officer_create_boat_movement_partial_arrival_sends_notifications_with_metadata(
+    client, monkeypatch
+):
+    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+
+    movement_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(
+        trip_service,
+        "create_boat_movement",
+        lambda **kwargs: (
+            {
+                "id": "m-pa-1",
+                "boat_id": kwargs["boat_id"],
+                "movement_type": "partial_arrival",
+                "movement_at": movement_at,
+                "partial_arrival_reason": "emergency",
+                "partial_arrival_details": "Engine overheating",
+                "image_url": None,
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        user_service,
+        "get_boat_by_id",
+        lambda _id: {"id": _id, "boat_number": "MH-01-1234", "boat_name": "B1", "boat_owner_id": "bo-1"},
+    )
+
+    created = {"count": 0, "calls": []}
+
+    def fake_create_notification(**kwargs):
+        created["count"] += 1
+        created["calls"].append(kwargs)
+        return "n-1"
+
+    monkeypatch.setattr(notification_service, "create_notification", fake_create_notification)
+
+    resp = client.post(
+        f"{settings.API_V1_STR}/port-officer/boats/boat-1/movements",
+        json={
+            "movement_type": "partial_arrival",
+            "partial_arrival_reason": "emergency",
+            "partial_arrival_details": "Engine overheating",
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["id"] == "m-pa-1"
+    assert body["boat_id"] == "boat-1"
+    assert body["movement_type"] == "partial_arrival"
+
+    # Admin + boat owner notifications
+    assert created["count"] == 2
+    for call in created["calls"]:
+        meta = call.get("metadata") or {}
+        assert meta.get("boat_owner_id") == "bo-1"
+        assert meta.get("partial_arrival_reason") == "emergency"
+        assert meta.get("partial_arrival_details") == "Engine overheating"
+
+
+def test_port_officer_create_boat_movement_temporary_arrival_still_notifies(client, monkeypatch):
+    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+
+    movement_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(
+        trip_service,
+        "create_boat_movement",
+        lambda **kwargs: (
+            {
+                "id": "m-ta-1",
+                "boat_id": kwargs["boat_id"],
+                "movement_type": "temporary_arrival",
+                "movement_at": movement_at,
+                "partial_arrival_reason": None,
+                "partial_arrival_details": None,
+                "image_url": None,
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        user_service,
+        "get_boat_by_id",
+        lambda _id: {"id": _id, "boat_number": "MH-01-1234", "boat_name": "B1", "boat_owner_id": "bo-1"},
+    )
+
+    created = {"count": 0, "types": []}
+
+    def fake_create_notification(**kwargs):
+        created["count"] += 1
+        created["types"].append(kwargs.get("notification_type"))
+        return "n-1"
+
+    monkeypatch.setattr(notification_service, "create_notification", fake_create_notification)
+
+    resp = client.post(
+        f"{settings.API_V1_STR}/port-officer/boats/boat-1/movements",
+        json={"movement_type": "arrival"},
+    )
+    assert resp.status_code == 201
+    # Should still create both notifications, and type should be normalized to boat_arrival.
+    assert created["count"] == 2
+    assert all(t == "boat_arrival" for t in created["types"])
+
+
+def test_port_officer_create_boat_movement_temporary_departure_still_notifies(client, monkeypatch):
+    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+
+    movement_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(
+        trip_service,
+        "create_boat_movement",
+        lambda **kwargs: (
+            {
+                "id": "m-td-1",
+                "boat_id": kwargs["boat_id"],
+                "movement_type": "temporary_departure",
+                "movement_at": movement_at,
+                "partial_arrival_reason": None,
+                "partial_arrival_details": None,
+                "image_url": None,
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        user_service,
+        "get_boat_by_id",
+        lambda _id: {"id": _id, "boat_number": "MH-01-1234", "boat_name": "B1", "boat_owner_id": "bo-1"},
+    )
+
+    created = {"count": 0, "types": []}
+
+    def fake_create_notification(**kwargs):
+        created["count"] += 1
+        created["types"].append(kwargs.get("notification_type"))
+        return "n-1"
+
+    monkeypatch.setattr(notification_service, "create_notification", fake_create_notification)
+
+    resp = client.post(
+        f"{settings.API_V1_STR}/port-officer/boats/boat-1/movements",
+        json={"movement_type": "departure"},
+    )
+    assert resp.status_code == 201
+    # Should still create both notifications, and type should be normalized to boat_departure.
+    assert created["count"] == 2
+    assert all(t == "boat_departure" for t in created["types"])
+
+
 def test_port_officer_set_movement_crew_success(client, monkeypatch):
     client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
 

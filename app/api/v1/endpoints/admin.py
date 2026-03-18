@@ -20,6 +20,31 @@ router = APIRouter()
 PAGE_MIN_DETAIL = "page must be >= 1"
 PAGE_SIZE_MIN_DETAIL = "page_size must be >= 1"
 
+# ==================== Dashboard ====================
+
+@router.get("/dashboard")
+async def admin_dashboard(
+    current_admin: dict = Depends(deps.get_admin_user),
+):
+    """Admin dashboard: quick snapshot counts for non-admin roles."""
+    data = crud_user.get_admin_dashboard_role_counts()
+    counts = data.get("counts") or {}
+    return {
+        "success": True,
+        "user": {
+            "id": current_admin.get("id", ""),
+            "name": current_admin.get("name", ""),
+        },
+        "quick_snapshot": {
+            "boat_owners": int(counts.get("boat_owner") or 0),
+            "harbour_officers": int(counts.get("officer") or 0),
+            "agents": int(counts.get("agent") or 0),
+            "buyers": int(counts.get("buyer") or 0),
+        },
+        "updated_at": data.get("updated_at"),
+    }
+
+
 # ==================== Notifications ====================
 
 @router.get("/notifications")

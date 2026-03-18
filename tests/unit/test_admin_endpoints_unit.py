@@ -45,6 +45,34 @@ def test_admin_list_boat_owners_success(client, monkeypatch):
     }
 
 
+def test_admin_dashboard_quick_snapshot_success(client, monkeypatch):
+    client.app.dependency_overrides[deps.get_admin_user] = _as_admin
+
+    monkeypatch.setattr(
+        crud_user,
+        "get_admin_dashboard_role_counts",
+        lambda: {
+            "counts": {"boat_owner": 42, "officer": 28, "agent": 42, "buyer": 28},
+            "updated_at": "2026-03-18T00:00:00Z",
+        },
+    )
+
+    resp = client.get(f"{settings.API_V1_STR}/admin/dashboard")
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "success": True,
+        "user": {"id": "admin-1", "name": "Admin"},
+        "quick_snapshot": {
+            "boat_owners": 42,
+            "harbour_officers": 28,
+            "agents": 42,
+            "buyers": 28,
+        },
+        "updated_at": "2026-03-18T00:00:00Z",
+    }
+
+
 def test_admin_get_boat_owner_404(client, monkeypatch):
     client.app.dependency_overrides[deps.get_admin_user] = _as_admin
 

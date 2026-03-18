@@ -464,6 +464,13 @@ async def create_boat_movement(
 
     # Create notifications for admin and boat owner about this movement.
     movement_type = movement.get("movement_type")
+    # Normalize stored movement types used by trip_service.
+    # - departure is stored as temporary_departure until inventory is attached
+    # - arrival is stored as temporary_arrival
+    movement_type = {
+        "temporary_departure": "departure",
+        "temporary_arrival": "arrival",
+    }.get(movement_type, movement_type)
     boat = user_service.get_boat_by_id(boat_id)
     boat_number = boat.get("boat_number") if boat else None
     boat_name = boat.get("boat_name") if boat else None
