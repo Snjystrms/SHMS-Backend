@@ -27,3 +27,5 @@ twilio
 
 # For tests (tests/admin/*.py hit the API with requests)
 requests
+pytest
+httpx
