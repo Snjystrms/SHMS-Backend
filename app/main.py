@@ -1,4 +1,7 @@
+import json
+from datetime import datetime
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import api_router
@@ -12,6 +15,65 @@ from app.core.exceptions import (
 )
 from fastapi import HTTPException
 from pathlib import Path
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+
+
+class ErrorTo200Middleware(BaseHTTPMiddleware):
+    """
+    Convert any `4xx/5xx` HTTP response into a `200` JSON response.
+    Also prints a short "why it failed" message to server logs.
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        response = await call_next(request)
+
+        if response.status_code < 400:
+            return response
+
+        orig_status = response.status_code
+        body_bytes = getattr(response, "body", b"") or b""
+
+        parsed_body = None
+        if body_bytes:
+            try:
+                parsed_body = json.loads(body_bytes)
+            except Exception:
+                parsed_body = None
+
+        detail = None
+        content = None
+        if isinstance(parsed_body, dict):
+            content = parsed_body
+            detail = parsed_body.get("detail") or parsed_body.get("message") or parsed_body.get("error")
+
+        if not detail:
+            if body_bytes:
+                detail = body_bytes.decode("utf-8", errors="ignore")[:500].strip() or "Request failed"
+            else:
+                detail = "Request failed"
+
+        # Server-side log line with request + original status + error detail
+        print(f"[API ERROR] {request.method} {request.url.path} -> {orig_status}. {detail}")
+
+        if not isinstance(content, dict):
+            content = {
+                "success": False,
+                "message": detail,
+            }
+
+        # Normalize response payload for the frontend.
+        content["success"] = False
+        content["status_code"] = orig_status
+        content.setdefault("path", str(request.url.path))
+        content.setdefault("timestamp", datetime.now().isoformat())
+
+        # Preserve important headers when present (e.g. WWW-Authenticate).
+        headers = {k: v for k, v in response.headers.items() if k.lower() in {"www-authenticate", "set-cookie"}}
+        headers["X-Original-Status-Code"] = str(orig_status)
+
+        return JSONResponse(content=content, status_code=200, headers=headers)
 
 
 app = FastAPI(
@@ -40,12 +102,15 @@ app.add_middleware(
     allow_headers=["*"],        # Content-Type, Authorization, etc.
 )
 
+# Convert 4xx/5xx responses to 200 + printed "why it failed"
+app.add_middleware(ErrorTo200Middleware)
+
 @app.on_event("startup")
 async def startup_event():
     local_ip = get_local_ip()
     print("\n" + "="*50)
     print(f"🚀 {settings.PROJECT_NAME} IS RUNNING!")
-    print(f"🔗 Local link:    http://127.0.0.1:8000")
+    print("🔗 Local link:    http://127.0.0.1:8000")
     print(f"👥 Network link:  http://{local_ip}:8000")
     print(f"📜 API Docs:      http://{local_ip}:8000/docs")
     print("="*50 + "\n")
@@ -62,3 +127,7 @@ app.include_router(auction_ws.router)
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+@app.get("/")
+def health_check():
+    return {"status": "SHMS Backend is running"}

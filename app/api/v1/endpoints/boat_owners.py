@@ -193,6 +193,16 @@ async def boat_owner_send_otp(req: ForgotPasswordRequest):
     )
 
 
+@router.post("/login/resend-otp")
+async def boat_owner_resend_otp(req: ForgotPasswordRequest):
+    """Resend OTP to boat owner's mobile for login."""
+    return send_otp_for_phone(
+        req.mobile_number.strip(),
+        crud_user.get_boat_owner_by_phone,
+        BOAT_OWNER_NOT_FOUND_DETAIL,
+    )
+
+
 @router.post("/login/verify", response_model=Token)
 async def boat_owner_verify_otp(req: BoatOwnerVerifyOtpRequest):
     """Verify OTP: if temp_user exists, create user then return token; else login existing boat owner."""

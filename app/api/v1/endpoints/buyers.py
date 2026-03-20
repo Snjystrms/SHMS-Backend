@@ -164,6 +164,16 @@ async def buyer_send_otp(req: ForgotPasswordRequest):
     )
 
 
+@router.post("/login/resend-otp")
+async def buyer_resend_otp(req: ForgotPasswordRequest):
+    """Resend OTP to buyer's mobile for login."""
+    return send_otp_for_phone(
+        req.mobile_number.strip(),
+        crud_user.get_buyer_by_phone,
+        BUYER_NOT_FOUND_DETAIL,
+    )
+
+
 @router.post("/login/verify", response_model=Token)
 async def buyer_verify_otp(req: BuyerVerifyOtpRequest):
     """
