@@ -418,6 +418,7 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
     """
     Return today's counts for port officer dashboard: departures, arrivals,
     crew registrations (new crew created today), crew verifications (crew scanned at departure today).
+    Departures/arrivals include only finalized movement types (exclude temporary_*).
     """
     now = datetime.now(timezone.utc)
     with _dashboard_counts_cache_lock:
@@ -438,14 +439,14 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
                 COALESCE((
                     SELECT COUNT(*)
                     FROM boat_movements
-                    WHERE movement_type IN ('departure', 'temporary_departure')
+                    WHERE movement_type = 'departure'
                       AND movement_at >= %s
                       AND movement_at < %s
                 ), 0) AS departures,
                 COALESCE((
                     SELECT COUNT(*)
                     FROM boat_movements
-                    WHERE movement_type IN ('arrival', 'temporary_arrival')
+                    WHERE movement_type = 'arrival'
                       AND movement_at >= %s
                       AND movement_at < %s
                 ), 0) AS arrivals,
