@@ -113,11 +113,11 @@ def test_boat_owner_list_my_auctions_boat_owner_branch(client, monkeypatch):
 
     called = {"seller": 0, "agent": 0}
 
-    def list_for_seller(_seller_id):
+    def list_for_seller(_seller_id, status_filter=None):
         called["seller"] += 1
         return [_auction_dict("auc-1", seller_id="bo-1")]
 
-    def list_for_agent(_agent_id):
+    def list_for_agent(_agent_id, status_filter=None):
         called["agent"] += 1
         return [_auction_dict("auc-2", seller_id="bo-1")]
 
@@ -136,17 +136,46 @@ def test_boat_owner_list_my_auctions_agent_branch(client, monkeypatch):
     monkeypatch.setattr(
         boat_owner_endpoints.auction_service,
         "list_auctions_for_agent",
-        lambda _id: [_auction_dict("auc-2", seller_id="bo-1")],
+        lambda _id, status_filter=None: [_auction_dict("auc-2", seller_id="bo-1")],
     )
     monkeypatch.setattr(
         boat_owner_endpoints.auction_service,
         "list_auctions_for_seller",
-        lambda _id: [_auction_dict("auc-x", seller_id="bo-1")],
+        lambda _id, status_filter=None: [_auction_dict("auc-x", seller_id="bo-1")],
     )
 
     resp = client.get(f"{settings.API_V1_STR}/boat-owners/auctions")
     assert resp.status_code == 200
     assert resp.json()[0]["id"] == "auc-2"
+
+
+def test_boat_owner_list_my_auctions_status_filter_invalid_status_400(client):
+    client.app.dependency_overrides[deps.get_boat_owner_or_agent_user] = _as_boat_owner
+    resp = client.get(f"{settings.API_V1_STR}/boat-owners/auctions?status=bad")
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Invalid status. Allowed values: scheduled, active, completed, cancelled"
+
+
+def test_boat_owner_list_my_auctions_status_filter_passed_to_service(client, monkeypatch):
+    client.app.dependency_overrides[deps.get_boat_owner_or_agent_user] = _as_boat_owner
+
+    captured = {"status_filter": None}
+
+    def list_for_seller(_seller_id, status_filter=None):
+        captured["status_filter"] = status_filter
+        return [_auction_dict("auc-1", seller_id="bo-1")]
+
+    monkeypatch.setattr(boat_owner_endpoints.auction_service, "list_auctions_for_seller", list_for_seller)
+    monkeypatch.setattr(
+        boat_owner_endpoints.auction_service,
+        "list_auctions_for_agent",
+        lambda _agent_id, status_filter=None: [_auction_dict("auc-2", seller_id="bo-1")],
+    )
+
+    resp = client.get(f"{settings.API_V1_STR}/boat-owners/auctions?status=ACTIVE")
+    assert resp.status_code == 200
+    assert resp.json()[0]["id"] == "auc-1"
+    assert captured["status_filter"] == "active"
 
 
 def test_boat_owner_list_my_notifications_success(client, monkeypatch):

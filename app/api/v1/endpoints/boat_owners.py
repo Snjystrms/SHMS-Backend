@@ -74,6 +74,7 @@ async def boat_owner_dashboard(
     response_model=list[Auction],
 )
 async def list_my_auctions(
+    status_filter: Optional[str] = Query(None, alias="status"),
     current_user: dict = Depends(deps.get_boat_owner_or_agent_user),
 ):
     """
@@ -84,10 +85,19 @@ async def list_my_auctions(
     - Auctions created by an agent using an approved bidding request where this
       boat owner is the seller (seller_id stored as boat_owner_id).
     """
+    status_value: Optional[str] = None
+    if status_filter is not None:
+        status_value = status_filter.strip().lower()
+        if status_value not in {"scheduled", "active", "completed", "cancelled"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid status. Allowed values: scheduled, active, completed, cancelled",
+            )
+
     if current_user.get("role") == "agent":
-        auctions = auction_service.list_auctions_for_agent(current_user["id"])
+        auctions = auction_service.list_auctions_for_agent(current_user["id"], status_filter=status_value)
     else:
-        auctions = auction_service.list_auctions_for_seller(current_user["id"])
+        auctions = auction_service.list_auctions_for_seller(current_user["id"], status_filter=status_value)
     return auctions
 
 

@@ -114,8 +114,8 @@ async def end_auction(
     """
     Manually end an auction:
     - Only the seller (boat owner) or the agent who created the auction can end it.
-    - Status becomes 'completed'.
     - winner_id is set to highest bidder if any.
+    - Status becomes 'completed' when there is at least one bid, otherwise 'cancelled'.
     """
     if current_user["role"] == "agent":
         auction = auction_service.end_auction_by_agent(auction_id, current_user["id"])

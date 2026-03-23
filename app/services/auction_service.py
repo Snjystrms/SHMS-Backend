@@ -387,14 +387,23 @@ def list_auctions() -> List[Dict[str, Any]]:
         conn.close()
 
 
-def list_auctions_for_seller(seller_id: str) -> List[Dict[str, Any]]:
+def list_auctions_for_seller(
+    seller_id: str,
+    status_filter: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """
     Return auctions for a specific seller (boat owner), including:
     - Self-created auctions (movement_id-based).
     - Auctions created by an agent from an approved bidding request where this
       boat owner is the seller (seller_id stored as boat_owner_id).
     Status is lazily updated using the same IST-based logic as list_auctions().
+    Optionally filter by auction status.
     """
+    status_value = (status_filter or "").strip().lower() if status_filter else None
+    allowed_statuses = {"scheduled", "active", "completed", "cancelled"}
+    if status_value and status_value not in allowed_statuses:
+        return []
+
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -415,16 +424,19 @@ def list_auctions_for_seller(seller_id: str) -> List[Dict[str, Any]]:
         )
         conn.commit()
 
-        cur.execute(
-            """
+        select_sql = """
             SELECT id, seller_id, fish_name, initial_price, current_price, sale,
                    start_time, end_time, status, winner_id, bidding_request_id, auction_type, movement_id
             FROM auctions
             WHERE seller_id = %s
-            ORDER BY created_at DESC
-            """,
-            (seller_id,),
-        )
+        """
+        params: Tuple[Any, ...] = (seller_id,)
+        if status_value:
+            select_sql += " AND status = %s"
+            params = (seller_id, status_value)
+        select_sql += " ORDER BY created_at DESC"
+
+        cur.execute(select_sql, params)
         rows = cur.fetchall()
         return [_auction_from_row(r) for r in rows]
     except Exception as e:
@@ -436,13 +448,22 @@ def list_auctions_for_seller(seller_id: str) -> List[Dict[str, Any]]:
         conn.close()
 
 
-def list_auctions_for_agent(agent_id: str) -> List[Dict[str, Any]]:
+def list_auctions_for_agent(
+    agent_id: str,
+    status_filter: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """
     Return auctions created by the given agent (via approved bidding requests).
 
     Note: movement_id-based (boat owner self) auctions are not included because they
     don't have a bidding_request_id to link back to an agent.
+    Optionally filter by auction status.
     """
+    status_value = (status_filter or "").strip().lower() if status_filter else None
+    allowed_statuses = {"scheduled", "active", "completed", "cancelled"}
+    if status_value and status_value not in allowed_statuses:
+        return []
+
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -465,18 +486,21 @@ def list_auctions_for_agent(agent_id: str) -> List[Dict[str, Any]]:
         )
         conn.commit()
 
-        cur.execute(
-            """
+        select_sql = """
             SELECT
                 a.id, a.seller_id, a.fish_name, a.initial_price, a.current_price, a.sale,
                 a.start_time, a.end_time, a.status, a.winner_id, a.bidding_request_id, a.auction_type, a.movement_id
             FROM auctions a
             JOIN bidding_requests br ON br.id = a.bidding_request_id
             WHERE br.agent_id = %s
-            ORDER BY a.created_at DESC
-            """,
-            (agent_id,),
-        )
+        """
+        params: Tuple[Any, ...] = (agent_id,)
+        if status_value:
+            select_sql += " AND a.status = %s"
+            params = (agent_id, status_value)
+        select_sql += " ORDER BY a.created_at DESC"
+
+        cur.execute(select_sql, params)
         rows = cur.fetchall()
         return [_auction_from_row(r) for r in rows]
     except Exception as e:
@@ -866,8 +890,8 @@ def end_auction(auction_id: str, seller_id: str) -> Optional[Dict[str, Any]]:
     """
     Manually end an auction:
     - Only the seller can end it.
-    - Sets status to 'completed'.
     - Sets winner_id to highest bidder (if any).
+    - Sets status to 'completed' when there is a winner, otherwise 'cancelled'.
     """
     conn = get_db_connection()
     cur = conn.cursor()
@@ -905,19 +929,20 @@ def end_auction(auction_id: str, seller_id: str) -> Optional[Dict[str, Any]]:
         bid_row = cur.fetchone()
         winner_id = bid_row[0] if bid_row else None
 
+        next_status = "completed" if winner_id else "cancelled"
         cur.execute(
             """
             UPDATE auctions
-            SET status = 'completed',
+            SET status = %s,
                 winner_id = %s,
                 updated_at = NOW()
             WHERE id = %s
             """,
-            (winner_id, auction_id),
+            (next_status, winner_id, auction_id),
         )
         conn.commit()
 
-        auction["status"] = "completed"
+        auction["status"] = next_status
         auction["winner_id"] = winner_id
         auction["_ended_now"] = True
         return auction
@@ -934,8 +959,8 @@ def end_auction_by_agent(auction_id: str, agent_id: str) -> Optional[Dict[str, A
     """
     Manually end an auction (agent-created auctions only):
     - Only the agent who created the auction (via bidding_request) can end it.
-    - Sets status to 'completed'.
     - Sets winner_id to highest bidder (if any).
+    - Sets status to 'completed' when there is a winner, otherwise 'cancelled'.
     """
     conn = get_db_connection()
     cur = conn.cursor()
@@ -973,19 +998,20 @@ def end_auction_by_agent(auction_id: str, agent_id: str) -> Optional[Dict[str, A
         bid_row = cur.fetchone()
         winner_id = bid_row[0] if bid_row else None
 
+        next_status = "completed" if winner_id else "cancelled"
         cur.execute(
             """
             UPDATE auctions
-            SET status = 'completed',
+            SET status = %s,
                 winner_id = %s,
                 updated_at = NOW()
             WHERE id = %s
             """,
-            (winner_id, auction_id),
+            (next_status, winner_id, auction_id),
         )
         conn.commit()
 
-        auction["status"] = "completed"
+        auction["status"] = next_status
         auction["winner_id"] = winner_id
         auction["_ended_now"] = True
         return auction
