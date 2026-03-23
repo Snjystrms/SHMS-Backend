@@ -31,6 +31,10 @@ chmod +x run.sh && ./run.sh
 
 **API docs:** http://127.0.0.1:8000/docs (or http://\<your-lan-ip\>:8000/docs)
 
+### Deploy to Railway
+
+See **[DEPLOY_RAILWAY.md](./DEPLOY_RAILWAY.md)** for deploying this backend on Railway (PostgreSQL with **pgvector**, environment variables, and troubleshooting).
+
 ---
 
 ## 🚀 Features
