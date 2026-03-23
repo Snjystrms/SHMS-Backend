@@ -464,7 +464,7 @@ def record_delivery(
         if required_quantity > 0 and delivered_quantity > required_quantity:
             return False, f"Delivered quantity cannot exceed requested quantity ({required_quantity} KG)"
 
-        new_status = "completed" if required_quantity > 0 and delivered_quantity >= required_quantity else "pending"
+        new_status = "completed"
         cur.execute(
             """
             UPDATE auctions
@@ -553,7 +553,7 @@ def record_delivery_by_agent(
         if required_quantity > 0 and delivered_quantity > required_quantity:
             return False, f"Delivered quantity cannot exceed requested quantity ({required_quantity} KG)"
 
-        new_status = "completed" if required_quantity > 0 and delivered_quantity >= required_quantity else "pending"
+        new_status = "completed"
         cur.execute(
             """
             UPDATE auctions
