@@ -133,6 +133,7 @@ async def boat_owner_sales_report(
     Boat owner sales report (per-auction rows).
 
     - Earnings are computed from `auctions.sale` (set when delivery is recorded).
+    - Records include `delivered_at` from `auctions.delivered_at`.
     - Date filtering applies to auction `start_time`.
     """
     try:

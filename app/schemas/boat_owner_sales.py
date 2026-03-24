@@ -29,7 +29,7 @@ class BoatOwnerSalesReportItem(BaseModel):
     boat_number: Optional[str] = None
     fish_type: Optional[str] = None
     auction_type: Optional[str] = None
-    start_time: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
     sale: float = Field(..., ge=0)
 
 

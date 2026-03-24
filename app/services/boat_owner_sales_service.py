@@ -151,7 +151,7 @@ def get_sales_report(
                 a.id,
                 a.fish_name,
                 a.auction_type,
-                a.start_time,
+                a.delivered_at,
                 a.sale,
                 b.boat_number
             FROM auctions a
@@ -171,7 +171,7 @@ def get_sales_report(
             auction_id = str(r[0])
             fish_name = r[1] or None
             auction_type_raw = r[2] or "open_box"
-            start_time = r[3]
+            delivered_at = r[3]
             sale = float(r[4] or 0.0)
             boat_number = r[5]
 
@@ -182,7 +182,7 @@ def get_sales_report(
                     "boat_number": (str(boat_number).strip() if boat_number else None),
                     "fish_type": fish_name,
                     "auction_type": _auction_type_display(auction_type_raw),
-                    "start_time": start_time,
+                    "delivered_at": delivered_at,
                     "sale": sale,
                 }
             )

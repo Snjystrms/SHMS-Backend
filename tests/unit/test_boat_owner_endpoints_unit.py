@@ -202,16 +202,29 @@ def test_boat_owner_sales_report_success(client, monkeypatch):
         "get_sales_report",
         lambda **kwargs: {
             "success": True,
-            "total_earning": 0.0,
-            "total_records": 0,
+            "total_earning": 100.0,
+            "total_records": 1,
             "filter_applied": {"filter": str(kwargs["filter_name"]), "from_date": None, "to_date": None},
-            "records": [],
+            "records": [
+                {
+                    "auction_id": "auc-1",
+                    "auction_identifier": "AUC-001",
+                    "boat_number": "MH-1",
+                    "fish_type": "Pomfret",
+                    "auction_type": "Open Box",
+                    "delivered_at": "2026-01-02T00:00:00Z",
+                    "sale": 100.0,
+                }
+            ],
         },
     )
 
     resp = client.get(f"{settings.API_V1_STR}/boat-owners/sales/report?filter=last_three_months")
     assert resp.status_code == 200
-    assert resp.json()["success"] is True
+    body = resp.json()
+    assert body["success"] is True
+    assert body["records"][0]["delivered_at"] == "2026-01-02T00:00:00Z"
+    assert "start_time" not in body["records"][0]
 
 
 def test_boat_owner_sales_report_value_error_400(client, monkeypatch):
