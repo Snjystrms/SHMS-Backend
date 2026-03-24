@@ -506,6 +506,22 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
     try:
         cur.execute(
             """
+            WITH latest_movement AS (
+                SELECT DISTINCT ON (m.boat_id)
+                    m.boat_id,
+                    m.id AS movement_id
+                FROM boat_movements m
+                ORDER BY m.boat_id, m.movement_at DESC, m.id DESC
+            ),
+            started_auctions AS (
+                SELECT DISTINCT a.movement_id
+                FROM auctions a
+                WHERE a.movement_id IS NOT NULL
+                  AND (
+                    a.status IN ('active', 'completed')
+                    OR (a.start_time IS NOT NULL AND a.start_time <= NOW() AND a.status <> 'cancelled')
+                  )
+            )
             SELECT
                 b.id,
                 b.boat_number,
@@ -530,9 +546,13 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
                 ORDER BY created_at DESC
                 LIMIT 1
             ) a ON TRUE
+            LEFT JOIN latest_movement lm ON lm.boat_id = b.id
+            LEFT JOIN started_auctions sa ON sa.movement_id = lm.movement_id
             WHERE m.movement_type IN ('arrival', 'temporary_arrival')
               AND m.movement_at >= %s
               AND m.movement_at < %s
+              AND b.boat_owner_id IS NOT NULL
+              AND sa.movement_id IS NULL
             ORDER BY m.movement_at DESC
             """,
             (agent_id, today_start_ist, today_end_ist),

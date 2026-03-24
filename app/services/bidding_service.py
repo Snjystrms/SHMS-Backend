@@ -107,8 +107,8 @@ def list_bidding_requests_for_owner(
                 br.agent_id, u.name AS agent_name,
                 br.status, br.note, br.created_at
             FROM bidding_requests br
-            JOIN boats b ON b.id = br.boat_id AND b.deleted_at IS NULL
-            JOIN users u ON u.id = br.agent_id
+            LEFT JOIN boats b ON b.id = br.boat_id AND b.deleted_at IS NULL
+            LEFT JOIN users u ON u.id = br.agent_id
             WHERE br.boat_owner_id = %s
         """
         params: list = [boat_owner_id]
@@ -157,14 +157,34 @@ def list_bidding_requests_for_agent(
     cur = conn.cursor()
     try:
         query = """
+            WITH latest_movement AS (
+                SELECT DISTINCT ON (m.boat_id)
+                    m.boat_id,
+                    m.id AS movement_id
+                FROM boat_movements m
+                ORDER BY m.boat_id, m.movement_at DESC, m.id DESC
+            ),
+            started_auctions AS (
+                SELECT DISTINCT a.movement_id
+                FROM auctions a
+                WHERE a.movement_id IS NOT NULL
+                  AND (
+                    a.status IN ('active', 'completed')
+                    OR (a.start_time IS NOT NULL AND a.start_time <= NOW() AND a.status <> 'cancelled')
+                  )
+            )
             SELECT
                 br.id, br.boat_id, b.boat_number, b.boat_name,
                 br.agent_id, u.name AS agent_name,
                 br.status, br.note, br.created_at
             FROM bidding_requests br
-            JOIN boats b ON b.id = br.boat_id AND b.deleted_at IS NULL
-            JOIN users u ON u.id = br.agent_id
+            LEFT JOIN boats b ON b.id = br.boat_id AND b.deleted_at IS NULL
+            LEFT JOIN users u ON u.id = br.agent_id
+            LEFT JOIN latest_movement lm ON lm.boat_id = br.boat_id
+            LEFT JOIN started_auctions sa ON sa.movement_id = lm.movement_id
             WHERE br.agent_id = %s
+              AND b.boat_owner_id IS NOT NULL
+              AND sa.movement_id IS NULL
         """
         params: list = [agent_id]
         if status_filter and status_filter in ("pending", "approved", "rejected"):

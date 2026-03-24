@@ -11,7 +11,9 @@ class AgentArrivedBoatItem(BaseModel):
     boat_name: str
     boat_status: str
     time: str
+    bidding_request_id: Optional[str] = None
     bidding_request_status: Optional[str] = None
+    auction_status: Optional[str] = None
 
 
 class AgentDashboardUser(BaseModel):
