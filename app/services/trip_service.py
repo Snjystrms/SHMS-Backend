@@ -511,16 +511,25 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
                 b.boat_number,
                 b.boat_name,
                 m.movement_at,
+                br.id AS bidding_request_id,
                 br.status AS bidding_request_status,
+                a.status AS auction_status,
                 COUNT(*) OVER() AS arrived_count
             FROM boat_movements m
             JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
             LEFT JOIN (
-                SELECT DISTINCT ON (boat_id) boat_id, status
+                SELECT DISTINCT ON (boat_id) id, boat_id, status
                 FROM bidding_requests
                 WHERE agent_id = %s
                 ORDER BY boat_id, created_at DESC
             ) br ON br.boat_id = b.id
+            LEFT JOIN LATERAL (
+                SELECT status
+                FROM auctions
+                WHERE bidding_request_id = br.id
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) a ON TRUE
             WHERE m.movement_type IN ('arrival', 'temporary_arrival')
               AND m.movement_at >= %s
               AND m.movement_at < %s
@@ -529,7 +538,7 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
             (agent_id, today_start_ist, today_end_ist),
         )
         rows = cur.fetchall()
-        arrived_count = int(rows[0][5]) if rows else 0
+        arrived_count = int(rows[0][7]) if rows else 0
         boats = [
             {
                 "boat_id": str(r[0]),
@@ -541,7 +550,9 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
                     if r[3]
                     else None
                 ),
-                "bidding_request_status": r[4] if len(r) > 4 and r[4] else None,
+                "bidding_request_id": str(r[4]) if len(r) > 4 and r[4] else None,
+                "bidding_request_status": r[5] if len(r) > 5 and r[5] else None,
+                "auction_status": r[6] if len(r) > 6 and r[6] else None,
             }
             for r in rows
         ]
@@ -621,6 +632,15 @@ def get_boat_owner_dashboard(boat_owner_id: str) -> Dict[str, Any]:
                 JOIN owned_boats ob ON ob.id = br.boat_id
                 WHERE br.status = 'pending'
                 GROUP BY br.boat_id
+            ),
+            started_auctions AS (
+                SELECT DISTINCT a.movement_id
+                FROM auctions a
+                WHERE a.movement_id IS NOT NULL
+                  AND (
+                    a.status IN ('active', 'completed')
+                    OR (a.start_time IS NOT NULL AND a.start_time <= NOW() AND a.status <> 'cancelled')
+                  )
             )
             SELECT
                 la.movement_id,
@@ -632,6 +652,9 @@ def get_boat_owner_dashboard(boat_owner_id: str) -> Dict[str, Any]:
             FROM latest_arrivals la
             JOIN owned_boats ob ON ob.id = la.boat_id
             LEFT JOIN pending_request_counts prc ON prc.boat_id = ob.id
+            LEFT JOIN started_auctions sa ON sa.movement_id = la.movement_id
+            WHERE COALESCE(prc.cnt, 0) > 0
+              AND sa.movement_id IS NULL
             ORDER BY la.movement_at DESC
             """,
             (boat_owner_id, today_start_ist, today_end_ist),
