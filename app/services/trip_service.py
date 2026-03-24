@@ -533,12 +533,15 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
                 COUNT(*) OVER() AS arrived_count
             FROM boat_movements m
             JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
-            LEFT JOIN (
-                SELECT DISTINCT ON (boat_id) id, boat_id, status
+            LEFT JOIN LATERAL (
+                SELECT id, status
                 FROM bidding_requests
                 WHERE agent_id = %s
-                ORDER BY boat_id, created_at DESC
-            ) br ON br.boat_id = b.id
+                  AND boat_id = b.id
+                  AND created_at >= m.movement_at
+                ORDER BY created_at DESC
+                LIMIT 1
+            ) br ON TRUE
             LEFT JOIN LATERAL (
                 SELECT status
                 FROM auctions
@@ -553,6 +556,7 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
               AND m.movement_at < %s
               AND b.boat_owner_id IS NOT NULL
               AND sa.movement_id IS NULL
+              AND COALESCE(br.status, '') <> 'rejected'
             ORDER BY m.movement_at DESC
             """,
             (agent_id, today_start_ist, today_end_ist),
