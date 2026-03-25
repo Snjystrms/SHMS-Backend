@@ -308,7 +308,9 @@ async def verify_crew_otp(
     current_user: dict = Depends(deps.get_admin_or_officer_user)
 ):
     """
-    Step 2: Verify OTP sent to the crew member's phone. On success, creates the crew member and returns details.
+    Step 2: Verify OTP sent to the crew member's phone.
+    With a pending row (photo + OTP flow), creates the crew member.
+    With only an unregistered crew row (e.g. minimal officer register), marks that row as registered.
     """
     phone = req.mobile_number.strip()
     if not crud_user.verify_otp(phone, req.otp):
@@ -317,45 +319,70 @@ async def verify_crew_otp(
             detail="Invalid or expired OTP"
         )
     pending = crud_user.get_pending_crew_by_phone(phone)
-    if not pending:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No pending crew registration for this phone. Please submit the form again."
+    if pending:
+        emb = pending["embedding"]
+        if isinstance(emb, str):
+            emb = json.loads(emb)
+        embedding = np.array(emb, dtype=np.float32)
+        officer_id = current_user.get("id")
+        user_id = face_service.register_user(
+            pending["name"],
+            embedding,
+            aadhaar_number=pending["aadhaar_number"],
+            contact_number=pending["phone"],
+            emergency_contact_number=pending["emergency_contact_number"],
+            is_pilot=pending["is_pilot"],
+            registered_by_user_id=officer_id,
+            profile_crop_id=pending.get("profile_crop_id"),
         )
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to register crew member"
+            )
+        crud_user.delete_pending_crew_by_phone(phone)
 
-    emb = pending["embedding"]
-    if isinstance(emb, str):
-        emb = json.loads(emb)
-    embedding = np.array(emb, dtype=np.float32)
-    officer_id = current_user.get("id")
-    user_id = face_service.register_user(
-        pending["name"],
-        embedding,
-        aadhaar_number=pending["aadhaar_number"],
-        contact_number=pending["phone"],
-        emergency_contact_number=pending["emergency_contact_number"],
-        is_pilot=pending["is_pilot"],
-        registered_by_user_id=officer_id,
-        profile_crop_id=pending.get("profile_crop_id"),
+        return {
+            "success": True,
+            "id": user_id,
+            "name": pending["name"],
+            "aadhaar_number": pending["aadhaar_number"],
+            "contact_number": pending["phone"],
+            "emergency_contact_number": pending["emergency_contact_number"],
+            "is_pilot": pending["is_pilot"],
+            "is_register": True,
+            "message": "Crew member created successfully"
+        }
+
+    unregistered = face_service.get_unregistered_crew_member_for_phone(phone)
+    if unregistered:
+        if not face_service.promote_crew_member_to_registered(unregistered["id"]):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to complete crew registration"
+            )
+        crew = face_service.get_crew_member_by_id(unregistered["id"])
+        if not crew:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to load crew member"
+            )
+        return {
+            "success": True,
+            "id": crew["id"],
+            "name": crew["name"],
+            "aadhaar_number": crew["aadhaar_number"],
+            "contact_number": crew["contact_number"],
+            "emergency_contact_number": crew["emergency_contact_number"],
+            "is_pilot": crew["is_pilot"],
+            "is_register": True,
+            "message": "Crew member verified successfully"
+        }
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="No pending crew registration for this phone. Please submit the form again."
     )
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to register crew member"
-        )
-    crud_user.delete_pending_crew_by_phone(phone)
-
-    return {
-        "success": True,
-        "id": user_id,
-        "name": pending["name"],
-        "aadhaar_number": pending["aadhaar_number"],
-        "contact_number": pending["phone"],
-        "emergency_contact_number": pending["emergency_contact_number"],
-        "is_pilot": pending["is_pilot"],
-        "is_register": True,
-        "message": "Crew member created successfully"
-    }
 
 
 @router.post("/crew-members/resend-otp")
@@ -363,15 +390,11 @@ async def resend_crew_otp(
     req: ForgotPasswordRequest,
     current_user: dict = Depends(deps.get_admin_or_officer_user)
 ):
-    """Resend OTP for pending crew registration. Only valid for users with is_register=false (not fully registered)."""
+    """Resend OTP when there is a pending registration row or an unregistered crew member for this phone."""
     phone = req.mobile_number.strip()
-    if crud_user.is_crew_member_registered_by_phone(phone):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is already registered. OTP cannot be sent.",
-        )
     pending = crud_user.get_pending_crew_by_phone(phone)
-    if not pending:
+    unregistered = None if pending else face_service.get_unregistered_crew_member_for_phone(phone)
+    if not pending and not unregistered:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No pending crew registration for this phone. Please submit the form again."

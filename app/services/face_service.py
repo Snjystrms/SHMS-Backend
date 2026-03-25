@@ -795,6 +795,99 @@ def get_crew_member_by_id(crew_member_id):
         cur.close()
         conn.close()
 
+
+def get_unregistered_crew_member_for_phone(phone: str) -> Optional[Dict[str, Any]]:
+    """
+    Latest crew_members row for this phone with is_register=false (e.g. officer
+    minimal register flow) — no row in pending_crew_registrations.
+    """
+    p = (phone or "").strip()
+    if not p:
+        return None
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id, name, aadhaar_number, email, phone, emergency_contact_number, is_pilot, is_register
+            FROM crew_members
+            WHERE phone = %s AND is_register = false AND deleted_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (p,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "id": str(row[0]),
+            "name": row[1],
+            "aadhaar_number": row[2],
+            "email": row[3],
+            "contact_number": row[4],
+            "emergency_contact_number": row[5],
+            "is_pilot": row[6] if len(row) > 6 else False,
+            "is_register": row[7] if len(row) > 7 else False,
+        }
+    except Exception as e:
+        logger.exception("get_unregistered_crew_member_for_phone: %s", e)
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
+def promote_crew_member_to_registered(crew_member_id: str) -> bool:
+    """Set is_register=true and adjust officer registered/unregistered counts."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT registered_by_user_id, is_register
+            FROM crew_members
+            WHERE id = %s AND deleted_at IS NULL
+            """,
+            (crew_member_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+        registered_by_user_id, is_reg = row[0], row[1]
+        if is_reg is True:
+            return True
+        cur.execute(
+            """
+            UPDATE crew_members
+            SET is_register = true, updated_at = NOW()
+            WHERE id = %s AND is_register = false AND deleted_at IS NULL
+            """,
+            (crew_member_id,),
+        )
+        if cur.rowcount == 0:
+            return False
+        if registered_by_user_id:
+            cur.execute(
+                """
+                UPDATE users
+                SET unregistered_crew_count = GREATEST(COALESCE(unregistered_crew_count, 0) - 1, 0),
+                    registered_crew_count = COALESCE(registered_crew_count, 0) + 1
+                WHERE id = %s
+                """,
+                (registered_by_user_id,),
+            )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        logger.exception("promote_crew_member_to_registered: %s", e)
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
 def update_crew_member(crew_member_id, name=None, aadhaar_number=None, contact_number=None, emergency_contact_number=None, is_pilot=None):
     """Update a crew member's details."""
     conn = get_db_connection()
