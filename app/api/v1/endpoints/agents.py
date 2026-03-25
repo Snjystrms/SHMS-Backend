@@ -158,9 +158,14 @@ async def send_bidding_request(
         note=body.note,
     )
     if err:
-        if "not found" in err.lower():
+        err_l = err.lower()
+        if "not found" in err_l:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=err)
-        if "already have a pending" in err.lower():
+        if (
+            "already have a pending" in err_l
+            or "already have an approved" in err_l
+            or "was rejected" in err_l
+        ):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=err)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
 

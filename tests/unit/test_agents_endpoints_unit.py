@@ -191,6 +191,7 @@ def test_agents_send_bidding_request_success_sends_notification(client, monkeypa
     [
         ("Boat not found", 404),
         ("Already have a pending bidding request", 409),
+        ("Your bidding request for this arrival was rejected", 409),
         ("Bad request", 400),
     ],
 )

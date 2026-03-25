@@ -11,6 +11,66 @@ IST = ZoneInfo("Asia/Kolkata")
 IST_TIME_FMT = "%I:%M %p, %d %b %Y"
 
 
+def _latest_arrival_movement_id(cur, boat_id: str) -> Tuple[Optional[str], Optional[str]]:
+    """Return (movement_id, movement_type) for the boat's latest movement, if any."""
+    cur.execute(
+        """
+        SELECT id, movement_type
+        FROM boat_movements
+        WHERE boat_id = %s
+        ORDER BY movement_at DESC, id DESC
+        LIMIT 1
+        """,
+        (boat_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None, None
+    return str(row[0]), row[1]
+
+
+def _auction_started_for_movement(cur, movement_id: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM auctions a
+        WHERE a.movement_id = %s
+          AND (
+            a.status IN ('active', 'completed')
+            OR (a.start_time IS NOT NULL AND a.start_time <= NOW() AND a.status <> 'cancelled')
+          )
+        LIMIT 1
+        """,
+        (movement_id,),
+    )
+    return cur.fetchone() is not None
+
+
+def _existing_agent_request_for_movement(
+    cur, boat_id: str, agent_id: str, movement_id: str
+) -> Optional[str]:
+    cur.execute(
+        """
+        SELECT status FROM bidding_requests
+        WHERE boat_id = %s AND agent_id = %s AND movement_id = %s
+        LIMIT 1
+        """,
+        (boat_id, agent_id, movement_id),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
+def _duplicate_request_error(existing_status: str) -> Optional[str]:
+    if existing_status == "pending":
+        return "You already have a pending bidding request for this boat"
+    if existing_status == "rejected":
+        return "Your bidding request for this arrival was rejected"
+    if existing_status == "approved":
+        return "You already have an approved bidding request for this arrival"
+    return None
+
+
 def create_bidding_request(
     boat_id: str,
     agent_id: str,
@@ -18,7 +78,10 @@ def create_bidding_request(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
     Agent sends a bidding request for an arrived boat.
-    Validates: boat exists, boat has an owner, no duplicate pending request.
+    Validates: boat exists, boat has an owner, boat is currently arrived (latest
+    movement is arrival / temporary_arrival), no auction started for this
+    arrival, and at most one bidding request per agent per arrival movement
+    (rejected requests cannot be retried for the same arrival).
     Returns (request_dict, None) on success or (None, error_message).
     """
     conn = get_db_connection()
@@ -39,25 +102,30 @@ def create_bidding_request(
         boat_number = boat[2] or ""
         boat_name = boat[3] or ""
 
-        # Prevent duplicate pending request from the same agent for the same boat
-        cur.execute(
-            """
-            SELECT id FROM bidding_requests
-            WHERE boat_id = %s AND agent_id = %s AND status = 'pending'
-            """,
-            (boat_id, agent_id),
+        movement_id, movement_type = _latest_arrival_movement_id(cur, boat_id)
+        if not movement_id:
+            return None, "No movement record found for this boat"
+        if movement_type not in ("arrival", "temporary_arrival"):
+            return None, "Bidding is only available while the boat is arrived"
+
+        if _auction_started_for_movement(cur, movement_id):
+            return None, "An auction has already started for this arrival"
+
+        existing_status = _existing_agent_request_for_movement(
+            cur, boat_id, agent_id, movement_id
         )
-        if cur.fetchone():
-            return None, "You already have a pending bidding request for this boat"
+        dup_err = _duplicate_request_error(existing_status) if existing_status else None
+        if dup_err:
+            return None, dup_err
 
         request_id = str(uuid.uuid4())
         cur.execute(
             """
-            INSERT INTO bidding_requests (id, boat_id, agent_id, boat_owner_id, note)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO bidding_requests (id, boat_id, agent_id, boat_owner_id, movement_id, note)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id, created_at
             """,
-            (request_id, boat_id, agent_id, str(boat_owner_id), note),
+            (request_id, boat_id, agent_id, str(boat_owner_id), str(movement_id), note),
         )
         row = cur.fetchone()
         conn.commit()

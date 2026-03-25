@@ -578,7 +578,13 @@ def get_agent_dashboard_arrivals(agent_id: str) -> Dict[str, Any]:
                 FROM bidding_requests
                 WHERE agent_id = %s
                   AND boat_id = b.id
-                  AND created_at >= m.movement_at
+                  AND (
+                    movement_id = m.id
+                    OR (
+                      movement_id IS NULL
+                      AND created_at >= m.movement_at
+                    )
+                  )
                 ORDER BY created_at DESC
                 LIMIT 1
             ) br ON TRUE
