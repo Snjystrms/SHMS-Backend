@@ -417,7 +417,8 @@ def get_last_trips_for_boat(boat_id: str, limit: int = 3) -> List[Dict[str, Any]
 def get_dashboard_today_counts() -> Dict[str, Any]:
     """
     Return today's counts for port officer dashboard: departures, arrivals,
-    crew registrations (new crew created today), crew verifications (crew scanned at departure today).
+    crew registrations (new registered crew created today), crew verifications
+    (unregistered crew scanned at departure today: is_register = false).
     Departures/arrivals include only finalized movement types (exclude temporary_*).
     """
     now = datetime.now(timezone.utc)
@@ -461,6 +462,10 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
                 COALESCE((
                     SELECT COUNT(*)
                     FROM boat_movement_crew bmc
+                    JOIN crew_members cm
+                      ON cm.id = bmc.crew_member_id
+                     AND cm.is_register = FALSE
+                     AND cm.deleted_at IS NULL
                     JOIN boat_movements m
                       ON m.id = bmc.movement_id
                      AND m.movement_type IN ('departure', 'temporary_departure')
