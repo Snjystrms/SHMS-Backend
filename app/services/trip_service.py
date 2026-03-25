@@ -301,28 +301,60 @@ def get_movement_history(
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute(
-            """
-            SELECT
-                m.id,
-                m.boat_id,
-                b.boat_number,
-                b.boat_name,
-                m.movement_type,
-                m.movement_at,
-                m.port_name,
-                m.crew_count,
-                m.image_url
-            FROM boat_movements m
-            JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
-            WHERE m.movement_type = ANY(%s)
-              AND m.movement_at >= %s
-            ORDER BY m.movement_at DESC
-            OFFSET %s
-            LIMIT %s
-            """,
-            (list(db_types), start, offset_val, limit_val),
-        )
+        if movement_type == "departure":
+            # Arrival reuses the same movement row with movement_type=arrival but keeps departure_at.
+            # List by actual departure instant, not current movement_type.
+            cur.execute(
+                """
+                SELECT
+                    m.id,
+                    m.boat_id,
+                    b.boat_number,
+                    b.boat_name,
+                    m.movement_type,
+                    COALESCE(m.departure_at, m.movement_at) AS movement_at,
+                    m.port_name,
+                    m.crew_count,
+                    m.image_url
+                FROM boat_movements m
+                JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
+                WHERE (
+                    m.movement_type IN ('departure', 'temporary_departure')
+                    OR (
+                        m.departure_at IS NOT NULL
+                        AND m.movement_type IN ('arrival', 'temporary_arrival')
+                    )
+                )
+                  AND COALESCE(m.departure_at, m.movement_at) >= %s
+                ORDER BY COALESCE(m.departure_at, m.movement_at) DESC
+                OFFSET %s
+                LIMIT %s
+                """,
+                (start, offset_val, limit_val),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT
+                    m.id,
+                    m.boat_id,
+                    b.boat_number,
+                    b.boat_name,
+                    m.movement_type,
+                    m.movement_at,
+                    m.port_name,
+                    m.crew_count,
+                    m.image_url
+                FROM boat_movements m
+                JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
+                WHERE m.movement_type = ANY(%s)
+                  AND m.movement_at >= %s
+                ORDER BY m.movement_at DESC
+                OFFSET %s
+                LIMIT %s
+                """,
+                (list(db_types), start, offset_val, limit_val),
+            )
         rows = cur.fetchall()
         return [
             {
@@ -419,7 +451,11 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
     Return today's counts for port officer dashboard: departures, arrivals,
     crew registrations (new registered crew created today), crew verifications
     (unregistered crew scanned at departure today: is_register = false).
-    Departures/arrivals include only finalized movement types (exclude temporary_*).
+    Departures count rows whose departure_at falls in today's UTC window. The same
+    boat_movements row is updated to arrival after the boat returns; movement_type
+    is not used so completed trips still count. Crew verification matches the same
+    departure_at window on the linked movement row (no movement_type filter).
+    Arrivals use movement_at on finalized arrival rows (exclude temporary_*).
     """
     now = datetime.now(timezone.utc)
     with _dashboard_counts_cache_lock:
@@ -440,9 +476,8 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
                 COALESCE((
                     SELECT COUNT(*)
                     FROM boat_movements
-                    WHERE movement_type = 'departure'
-                      AND movement_at >= %s
-                      AND movement_at < %s
+                    WHERE departure_at >= %s
+                      AND departure_at < %s
                 ), 0) AS departures,
                 COALESCE((
                     SELECT COUNT(*)
@@ -468,9 +503,8 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
                      AND cm.deleted_at IS NULL
                     JOIN boat_movements m
                       ON m.id = bmc.movement_id
-                     AND m.movement_type IN ('departure', 'temporary_departure')
-                    WHERE m.movement_at >= %s
-                      AND m.movement_at < %s
+                    WHERE m.departure_at >= %s
+                      AND m.departure_at < %s
                 ), 0) AS crew_verification
             """,
             (start, end, start, end, start, end, start, end),
