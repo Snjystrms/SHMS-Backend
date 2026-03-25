@@ -1,7 +1,7 @@
 """Port officer endpoints: boat identification by registration number."""
 import urllib.request
 import uuid
-from typing import Optional
+from typing import Optional, Dict
 
 from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request
 from app.api import deps
@@ -48,7 +48,7 @@ from app.schemas.dashboard import (
 )
 from app.utils.sms import get_sms_provider
 from app.utils.otp_helpers import send_otp_for_phone
-from app.utils.uploads import save_crew_scan_image
+from app.utils.uploads import save_crew_scan_image, save_crew_crop
 from app.utils.url_helpers import resolve_image_url
 
 
@@ -691,6 +691,18 @@ async def arrival_crew_scan(
     missing_crew = []
     unidentified_count = 0
     unidentified_crew = []
+    request_base = str(request.base_url)
+
+    crew_crop_url_by_id: Dict[str, Optional[str]] = {}
+    for c in departure_crew:
+        crop_id = c.get("crop_id")
+        if crop_id:
+            crew_crop_url_by_id[c["id"]] = resolve_image_url(
+                f"/uploads/crew-crops/{crop_id}.png",
+                request_base,
+            )
+        else:
+            crew_crop_url_by_id[c["id"]] = None
 
     # When a departure crew list exists, keep the original behaviour:
     # compare the arrival scan with the crew attached to this trip.
@@ -707,6 +719,7 @@ async def arrival_crew_scan(
                 name=c["name"],
                 is_pilot=c.get("is_pilot", False),
                 status="present",
+                crop_image_url=crew_crop_url_by_id.get(c["id"]),
             )
             for c in departure_crew
             if c["id"] in matched_ids
@@ -717,19 +730,42 @@ async def arrival_crew_scan(
                 name=c["name"],
                 is_pilot=c.get("is_pilot", False),
                 status="missing",
+                crop_image_url=crew_crop_url_by_id.get(c["id"]),
             )
             for c in departure_crew
             if c["id"] not in matched_ids
         ]
-        unidentified_count = sum(
-            1
-            for f in faces
-            if not (
+        # Persist crop images for each unmatched face and include in response.
+        for f in faces:
+            is_known_trip_match = bool(
                 f.get("is_match")
                 and f.get("crew_member")
                 and f["crew_member"].get("id") in departure_crew_ids
             )
-        )
+            if is_known_trip_match:
+                continue
+            bbox = f.get("bbox")
+            crop_url: Optional[str] = None
+            if bbox and len(bbox) == 4:
+                crop_bytes = face_service.crop_face_from_image(image_bytes, bbox)
+                if crop_bytes:
+                    crop_id = uuid.uuid4().hex
+                    if save_crew_crop(crop_id, crop_bytes):
+                        crop_url = resolve_image_url(
+                            f"/uploads/crew-crops/{crop_id}.png",
+                            request_base,
+                        )
+            row_id = trip_service.save_unidentified_crew_member(
+                movement_id=movement_id,
+                crop_image_url=crop_url,
+            )
+            unidentified_crew.append(
+                ArrivalUnidentifiedEntry(
+                    id=row_id,
+                    crop_image_url=crop_url,
+                )
+            )
+        unidentified_count = len(unidentified_crew)
     else:
         # No departure crew recorded for this movement.
         # Treat matched faces as arrival crew instead of counting them as "unidentified".
@@ -747,15 +783,36 @@ async def arrival_crew_scan(
                         name=crew.get("name", ""),
                         is_pilot=crew.get("is_pilot", False),
                         status="present",
+                        crop_image_url=None,
                     )
                 )
-        unidentified_count = max(len(faces) - len(present_crew), 0)
-
-    if unidentified_count > 0:
-        unidentified_crew = [
-            ArrivalUnidentifiedEntry(id=str(uuid.uuid4()))
-            for _ in range(unidentified_count)
-        ]
+        # Any non-matching face at arrival is treated as unidentified.
+        for f in faces:
+            crew = f.get("crew_member")
+            if crew and f.get("is_match") and crew.get("id"):
+                continue
+            bbox = f.get("bbox")
+            crop_url: Optional[str] = None
+            if bbox and len(bbox) == 4:
+                crop_bytes = face_service.crop_face_from_image(image_bytes, bbox)
+                if crop_bytes:
+                    crop_id = uuid.uuid4().hex
+                    if save_crew_crop(crop_id, crop_bytes):
+                        crop_url = resolve_image_url(
+                            f"/uploads/crew-crops/{crop_id}.png",
+                            request_base,
+                        )
+            row_id = trip_service.save_unidentified_crew_member(
+                movement_id=movement_id,
+                crop_image_url=crop_url,
+            )
+            unidentified_crew.append(
+                ArrivalUnidentifiedEntry(
+                    id=row_id,
+                    crop_image_url=crop_url,
+                )
+            )
+        unidentified_count = len(unidentified_crew)
 
     # Generate annotated image with boxes for present/missing/unidentified
     annotated_image_url = None
@@ -763,7 +820,7 @@ async def arrival_crew_scan(
     if annotated_bytes:
         annotated_path = save_crew_scan_image(annotated_bytes)
         if annotated_path:
-            annotated_image_url = resolve_image_url(annotated_path, str(request.base_url))
+            annotated_image_url = resolve_image_url(annotated_path, request_base)
 
     return ArrivalCrewCheckResponse(
         movement_id=movement_id,
