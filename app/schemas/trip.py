@@ -167,6 +167,24 @@ class ArrivalCrewCheckResponse(BaseModel):
     unidentified_crew: List[ArrivalUnidentifiedEntry]  # one entry per unidentified face (or summary count)
 
 
+class ArrivalCrewSubmitRequest(BaseModel):
+    """Submit arrival crew discrepancies (used to notify admin)."""
+
+    missing_crew_ids: List[str] = []
+    unidentified_crew_ids: List[str] = []
+    report_missing_person: bool = False
+    notes: Optional[str] = None
+    annotated_image_url: Optional[str] = None
+
+
+class ArrivalCrewSubmitResponse(BaseModel):
+    """Response for arrival crew submit."""
+
+    success: bool = True
+    notification_id: Optional[str] = None
+    message: str = "Submitted successfully."
+
+
 class ArrivalInventoryItemCreate(BaseModel):
     """Arrival quantities for one category (officer fills after counting at arrival)."""
 

@@ -1,4 +1,5 @@
 """Port officer endpoints: boat identification by registration number."""
+from datetime import datetime, timezone
 import urllib.request
 import uuid
 from typing import Optional, Dict
@@ -32,6 +33,8 @@ from app.schemas.trip import (
     ArrivalCrewCheckResponse,
     ArrivalCrewMemberStatus,
     ArrivalUnidentifiedEntry,
+    ArrivalCrewSubmitRequest,
+    ArrivalCrewSubmitResponse,
     ArrivalInventoryCheckRequest,
     ArrivalInventoryCheckResponse,
     ArrivalInventoryCheckSummary,
@@ -833,6 +836,78 @@ async def arrival_crew_scan(
         present_crew=present_crew,
         missing_crew=missing_crew,
         unidentified_crew=unidentified_crew,
+    )
+
+
+@router.post(
+    "/movements/{movement_id}/arrival/crew/submit",
+    response_model=ArrivalCrewSubmitResponse,
+)
+async def arrival_crew_submit(
+    movement_id: str,
+    body: ArrivalCrewSubmitRequest,
+    current_user: dict = Depends(deps.get_admin_or_officer_user),
+):
+    """
+    Port officer submits arrival crew results. Creates an admin notification only if
+    missing/unidentified crew exists.
+    """
+    movement = trip_service.get_trip_movement_by_id(movement_id)
+    if not movement:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Movement not found or not a valid trip (departure/arrival).",
+        )
+
+    missing_ids = [x for x in (body.missing_crew_ids or []) if x]
+    unidentified_ids = [x for x in (body.unidentified_crew_ids or []) if x]
+
+    if len(missing_ids) == 0 and len(unidentified_ids) == 0:
+        return ArrivalCrewSubmitResponse(
+            success=True,
+            notification_id=None,
+            message="No missing or unidentified crew. Submit recorded.",
+        )
+
+    boat_id = movement.get("boat_id")
+    boat = user_service.get_boat_by_id(boat_id) if boat_id else None
+    boat_number = boat.get("boat_number") if boat else None
+    boat_name = boat.get("boat_name") if boat else None
+    boat_label = boat_number or boat_name or (boat_id or "Unknown boat")
+
+    parts = []
+    if len(missing_ids) > 0:
+        parts.append(f"{len(missing_ids)} missing")
+    if len(unidentified_ids) > 0:
+        parts.append(f"{len(unidentified_ids)} unidentified")
+    counts_str = ", ".join(parts) if parts else "discrepancy"
+
+    notification_id = notification_service.create_notification(
+        notification_type="arrival_crew_discrepancy",
+        title=f"Arrival crew discrepancy: {boat_label}",
+        message=f"Boat {boat_label}: {counts_str}.",
+        metadata={
+            "movement_id": movement_id,
+            "boat_id": boat_id,
+            "boat_number": boat_number,
+            "boat_name": boat_name,
+            "missing_crew_ids": missing_ids,
+            "unidentified_crew_ids": unidentified_ids,
+            "missing_crew_count": len(missing_ids),
+            "unidentified_count": len(unidentified_ids),
+            "report_missing_person": bool(body.report_missing_person),
+            "notes": (body.notes or "").strip() or None,
+            "annotated_image_url": body.annotated_image_url,
+            "submitted_by_user_id": current_user.get("id"),
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+        },
+        priority="high",
+    )
+
+    return ArrivalCrewSubmitResponse(
+        success=True,
+        notification_id=notification_id,
+        message="Submitted and admin notified.",
     )
 
 
