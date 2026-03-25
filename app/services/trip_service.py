@@ -8,10 +8,9 @@ from app.db.session import get_db_connection
 
 _DASHBOARD_COUNTS_CACHE_TTL_SECONDS = 10
 _dashboard_counts_cache_lock = Lock()
-_dashboard_counts_cache: Dict[str, Any] = {
-    "expires_at": datetime.min.replace(tzinfo=timezone.utc),
-    "data": None,
-}
+# Cache per officer (and global when officer_user_id is None).
+# Shape: { cache_key: {"expires_at": datetime, "data": Dict[str, Any]} }
+_dashboard_counts_cache: Dict[Optional[str], Dict[str, Any]] = {}
 
 
 def get_boat_trip_status(boat_id: str) -> Optional[Dict[str, Any]]:
@@ -263,6 +262,7 @@ def get_boat_trip_statuses(boat_ids: List[str]) -> Dict[str, Dict[str, Any]]:
 def get_movement_history(
     movement_type: str,
     date_filter: str,
+    officer_user_id: Optional[str] = None,
     offset: int = 0,
     limit: int = 10,
 ) -> List[Dict[str, Any]]:
@@ -301,11 +301,17 @@ def get_movement_history(
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        officer_clause = ""
+        officer_params: List[Any] = []
+        if officer_user_id:
+            officer_clause = " AND m.logged_by_user_id = %s"
+            officer_params.append(officer_user_id)
+
         if movement_type == "departure":
             # Arrival reuses the same movement row with movement_type=arrival but keeps departure_at.
             # List by actual departure instant, not current movement_type.
             cur.execute(
-                """
+                f"""
                 SELECT
                     m.id,
                     m.boat_id,
@@ -326,15 +332,16 @@ def get_movement_history(
                     )
                 )
                   AND COALESCE(m.departure_at, m.movement_at) >= %s
+                  {officer_clause}
                 ORDER BY COALESCE(m.departure_at, m.movement_at) DESC
                 OFFSET %s
                 LIMIT %s
                 """,
-                (start, offset_val, limit_val),
+                (start, *officer_params, offset_val, limit_val),
             )
         else:
             cur.execute(
-                """
+                f"""
                 SELECT
                     m.id,
                     m.boat_id,
@@ -349,11 +356,12 @@ def get_movement_history(
                 JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
                 WHERE m.movement_type = ANY(%s)
                   AND m.movement_at >= %s
+                  {officer_clause}
                 ORDER BY m.movement_at DESC
                 OFFSET %s
                 LIMIT %s
                 """,
-                (list(db_types), start, offset_val, limit_val),
+                (list(db_types), start, *officer_params, offset_val, limit_val),
             )
         rows = cur.fetchall()
         return [
@@ -446,7 +454,7 @@ def get_last_trips_for_boat(boat_id: str, limit: int = 3) -> List[Dict[str, Any]
         conn.close()
 
 
-def get_dashboard_today_counts() -> Dict[str, Any]:
+def get_dashboard_today_counts(officer_user_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Return today's counts for port officer dashboard: departures, arrivals,
     crew registrations (new registered crew created today), crew verifications
@@ -459,10 +467,9 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
     """
     now = datetime.now(timezone.utc)
     with _dashboard_counts_cache_lock:
-        cached = _dashboard_counts_cache["data"]
-        expires_at = _dashboard_counts_cache["expires_at"]
-        if cached and now < expires_at:
-            return dict(cached)
+        cached_entry = _dashboard_counts_cache.get(officer_user_id)
+        if cached_entry and now < cached_entry["expires_at"]:
+            return dict(cached_entry["data"])
 
     start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
     end = start + timedelta(days=1)
@@ -470,14 +477,36 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
     conn = get_db_connection()
     cur = conn.cursor()
     try:
+        mv_officer_clause = " AND logged_by_user_id = %s" if officer_user_id else ""
+        crew_reg_clause = " AND registered_by_user_id = %s" if officer_user_id else ""
+        params: List[Any] = []
+
+        # departures
+        params.extend([start, end])
+        if officer_user_id:
+            params.append(officer_user_id)
+        # arrivals
+        params.extend([start, end])
+        if officer_user_id:
+            params.append(officer_user_id)
+        # crew_registration
+        params.extend([start, end])
+        if officer_user_id:
+            params.append(officer_user_id)
+        # crew_verification
+        params.extend([start, end])
+        if officer_user_id:
+            params.append(officer_user_id)
+
         cur.execute(
-            """
+            f"""
             SELECT
                 COALESCE((
                     SELECT COUNT(*)
                     FROM boat_movements
-                    WHERE departure_at >= %s
-                      AND departure_at < %s
+                    WHERE COALESCE(departure_at, movement_at) >= %s
+                      AND COALESCE(departure_at, movement_at) < %s
+                      {mv_officer_clause}
                 ), 0) AS departures,
                 COALESCE((
                     SELECT COUNT(*)
@@ -485,6 +514,7 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
                     WHERE movement_type = 'arrival'
                       AND movement_at >= %s
                       AND movement_at < %s
+                      {mv_officer_clause}
                 ), 0) AS arrivals,
                 COALESCE((
                     SELECT COUNT(*)
@@ -493,6 +523,7 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
                       AND created_at < %s
                       AND is_register = TRUE
                       AND deleted_at IS NULL
+                      {crew_reg_clause}
                 ), 0) AS crew_registration,
                 COALESCE((
                     SELECT COUNT(*)
@@ -503,11 +534,12 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
                      AND cm.deleted_at IS NULL
                     JOIN boat_movements m
                       ON m.id = bmc.movement_id
-                    WHERE m.departure_at >= %s
-                      AND m.departure_at < %s
+                    WHERE COALESCE(m.departure_at, m.movement_at) >= %s
+                      AND COALESCE(m.departure_at, m.movement_at) < %s
+                      {mv_officer_clause}
                 ), 0) AS crew_verification
             """,
-            (start, end, start, end, start, end, start, end),
+            tuple(params),
         )
         row = cur.fetchone() or (0, 0, 0, 0)
         departures, arrivals, crew_registration, crew_verification = row
@@ -520,10 +552,10 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
             "updated_at": now,
         }
         with _dashboard_counts_cache_lock:
-            _dashboard_counts_cache["data"] = result
-            _dashboard_counts_cache["expires_at"] = now + timedelta(
-                seconds=_DASHBOARD_COUNTS_CACHE_TTL_SECONDS
-            )
+            _dashboard_counts_cache[officer_user_id] = {
+                "data": result,
+                "expires_at": now + timedelta(seconds=_DASHBOARD_COUNTS_CACHE_TTL_SECONDS),
+            }
         return result
     finally:
         cur.close()
@@ -861,6 +893,28 @@ def get_trip_movement_by_id(movement_id: str, boat_id: Optional[str] = None) -> 
             "crew_count": row[5],
             "image_url": row[6],
         }
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_movement_owner_user_id(movement_id: str) -> Optional[str]:
+    """Return boat_movements.logged_by_user_id for this movement_id."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT logged_by_user_id
+            FROM boat_movements
+            WHERE id = %s
+            """,
+            (movement_id,),
+        )
+        row = cur.fetchone()
+        if not row or not row[0]:
+            return None
+        return str(row[0])
     finally:
         cur.close()
         conn.close()

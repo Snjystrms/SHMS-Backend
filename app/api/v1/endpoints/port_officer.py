@@ -94,6 +94,14 @@ def _get_sms():
 router = APIRouter()
 
 
+def _ensure_officer_owns_movement(movement_id: str, officer_user_id: Optional[str]) -> None:
+    owner_id = trip_service.get_movement_owner_user_id(movement_id)
+    if not owner_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Movement not found")
+    if not officer_user_id or owner_id != officer_user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to access this movement")
+
+
 @router.post("/forgot-password")
 async def port_officer_forgot_password(req: ForgotPasswordRequest):
     return send_otp_for_phone(
@@ -163,13 +171,13 @@ async def port_officer_reset_password(req: PortOfficerResetPasswordRequest):
 
 @router.get("/dashboard", response_model=PortOfficerDashboardResponse)
 async def get_port_officer_dashboard(
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Port officer dashboard: current user info and today's activity summary
     (departures, arrivals, crew registration, crew verification counts).
     """
-    counts = trip_service.get_dashboard_today_counts()
+    counts = trip_service.get_dashboard_today_counts(officer_user_id=current_user.get("id"))
     return PortOfficerDashboardResponse(
         user=PortOfficerDashboardUser(
             id=current_user.get("id", ""),
@@ -189,7 +197,7 @@ async def get_port_officer_dashboard(
 @router.post("/boats/identify/{boat_number}", response_model=BoatIdentifyResponse)
 async def identify_boat(
     boat_number: str,
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Port officer looks up a boat by registration/boat number.
@@ -233,7 +241,7 @@ async def identify_boat(
 @router.post("/boats/scan-number", response_model=BoatScanResponse)
 async def scan_boat_number(
     file: UploadFile = File(...),
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Scan a boat image to extract the registration number using OCR.
@@ -305,7 +313,7 @@ async def scan_boat_number(
 async def get_boat_trip_status(
     boat_id: str,
     request: Request,
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Fetch boat status with respect to trip: docked, sailing, arrived, or partial_arrival.
@@ -335,7 +343,7 @@ async def get_movement_history(
     date_filter: HistoryDateFilter = "today",
     page: int = 1,
     page_size: int = 10,
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     History API for boat movements (e.g. Departure History tab).
@@ -359,6 +367,7 @@ async def get_movement_history(
     records_raw = trip_service.get_movement_history(
         movement_type=movement_type,
         date_filter=date_filter,
+        officer_user_id=current_user.get("id"),
         offset=offset,
         limit=page_size,
     )
@@ -384,7 +393,7 @@ async def get_crew_scanned_history(
     is_register: Optional[bool] = None,
     page: int = 1,
     page_size: int = 10,
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Crew history for an officer.
@@ -431,7 +440,7 @@ async def get_crew_scanned_history(
 async def create_boat_movement(
     boat_id: str,
     body: BoatMovementCreate,
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Log a boat movement: departure, arrival, or partial arrival.
@@ -537,13 +546,14 @@ async def create_boat_movement(
 async def set_boat_movement_crew(
     movement_id: str,
     body: BoatMovementCrewCreate,
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Port officer attaches crew list for a specific departure movement (trip).
     Uses movement_id returned by the departure creation API.
     Pass crop_id per crew when attaching from scan-group-photo for face image in history.
     """
+    _ensure_officer_owns_movement(movement_id, current_user.get("id"))
     crew_ids = [item.crew_member_id for item in body.crew_members]
     crew_crop_ids = {
         item.crew_member_id: item.crop_id
@@ -577,12 +587,13 @@ async def set_boat_movement_crew(
 async def set_boat_movement_inventory(
     movement_id: str,
     body: BoatMovementInventoryCreate,
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Port officer records diesel, ice, fishing net count and plastic items for a trip.
     Uses movement_id (the departure movement for this trip).
     """
+    _ensure_officer_owns_movement(movement_id, current_user.get("id"))
     result, err = trip_service.set_boat_movement_inventory(
         movement_id=movement_id,
         diesel_liters=body.diesel_liters,
@@ -610,11 +621,12 @@ async def set_boat_movement_inventory(
 )
 async def get_boat_movement_inventory(
     movement_id: str,
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Fetch inventory details (diesel, ice, nets, plastics) for a specific trip movement (departure or arrival).
     """
+    _ensure_officer_owns_movement(movement_id, current_user.get("id"))
     movement = trip_service.get_trip_movement_by_id(movement_id)
     if not movement:
         raise HTTPException(
@@ -651,7 +663,7 @@ async def arrival_crew_scan(
     request: Request,
     file: Optional[UploadFile] = File(None),
     image_url: Optional[str] = Form(None),
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Arrival crew identification: scan image (upload or image_url) and compare with departure crew.
@@ -661,6 +673,7 @@ async def arrival_crew_scan(
     - Unidentified: face detected at arrival that does not match any crew from this trip's departure (e.g. from another boat).
     Provide either file or image_url; if both provided, file takes precedence.
     """
+    _ensure_officer_owns_movement(movement_id, current_user.get("id"))
     image_bytes: Optional[bytes] = None
     if file and file.filename:
         image_bytes = await file.read()
@@ -846,12 +859,13 @@ async def arrival_crew_scan(
 async def arrival_crew_submit(
     movement_id: str,
     body: ArrivalCrewSubmitRequest,
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Port officer submits arrival crew results. Creates an admin notification only if
     missing/unidentified crew exists.
     """
+    _ensure_officer_owns_movement(movement_id, current_user.get("id"))
     movement = trip_service.get_trip_movement_by_id(movement_id)
     if not movement:
         raise HTTPException(
@@ -919,12 +933,13 @@ async def arrival_inventory_check(
     movement_id: str,
     body: ArrivalInventoryCheckRequest,
     request: Request,
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     Compare arrival inventory counts with departure. Returns per-item status: matched or missing.
     Uses movement_id (the trip movement — same id for departure and after arrival). Optionally provide loss_reasons for missing items.
     """
+    _ensure_officer_owns_movement(movement_id, current_user.get("id"))
     movement = trip_service.get_trip_movement_by_id(movement_id)
     if not movement:
         raise HTTPException(
@@ -1004,7 +1019,7 @@ async def arrival_inventory_check(
 @router.post("/boats/pending-register", status_code=status.HTTP_201_CREATED)
 async def register_pending_boat(
     body: PendingBoatRegisterRequest,
-    current_user: dict = Depends(deps.get_admin_or_officer_user),
+    current_user: dict = Depends(deps.get_officer_user),
 ):
     """
     When boat identification fails, port officer adds boat number + owner mobile.

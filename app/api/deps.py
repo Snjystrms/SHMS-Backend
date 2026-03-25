@@ -51,6 +51,16 @@ def get_admin_or_officer_user(
     return current_user
 
 
+def get_officer_user(current_user: Dict = Depends(get_current_user)) -> Dict:
+    """Require current user to be an officer."""
+    if current_user.get("role") != "officer":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Port officer access required",
+        )
+    return current_user
+
+
 def get_boat_owner_user(current_user: Dict = Depends(get_current_user)) -> Dict:
     """Require current user to be a boat_owner."""
     if current_user.get("role") != "boat_owner":

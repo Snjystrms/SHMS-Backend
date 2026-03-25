@@ -57,12 +57,12 @@ def client(request):
 
 
 def test_port_officer_dashboard_success(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     monkeypatch.setattr(
         trip_service,
         "get_dashboard_today_counts",
-        lambda: {
+        lambda officer_user_id=None: {
             "departures": 1,
             "arrivals": 2,
             "crew_registration": 3,
@@ -80,7 +80,7 @@ def test_port_officer_dashboard_success(client, monkeypatch):
 
 
 def test_port_officer_identify_boat_blank_number_400(client):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     resp = client.post(f"{settings.API_V1_STR}/port-officer/boats/identify/   ")
     assert resp.status_code == 400
@@ -88,7 +88,7 @@ def test_port_officer_identify_boat_blank_number_400(client):
 
 
 def test_port_officer_identify_boat_not_found_404(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     monkeypatch.setattr(user_service, "get_boat_by_number_with_owner", lambda _n: None)
     monkeypatch.setattr(user_service, "get_boat_by_number", lambda _n: None)
@@ -99,7 +99,7 @@ def test_port_officer_identify_boat_not_found_404(client, monkeypatch):
 
 
 def test_port_officer_trip_status_not_found_404(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     monkeypatch.setattr(trip_service, "get_boat_trip_status", lambda _boat_id: None)
 
@@ -109,7 +109,7 @@ def test_port_officer_trip_status_not_found_404(client, monkeypatch):
 
 
 def test_port_officer_movement_history_page_validation_400(client):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     resp = client.get(
         f"{settings.API_V1_STR}/port-officer/movements/history?movement_type=departure&page=0"
@@ -119,7 +119,7 @@ def test_port_officer_movement_history_page_validation_400(client):
 
 
 def test_port_officer_crew_scanned_history_success(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     monkeypatch.setattr(
         trip_service,
@@ -149,7 +149,7 @@ def test_port_officer_crew_scanned_history_success(client, monkeypatch):
 
 
 def test_port_officer_pending_register_validation_400(client):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     resp = client.post(
         f"{settings.API_V1_STR}/port-officer/boats/pending-register",
@@ -160,7 +160,7 @@ def test_port_officer_pending_register_validation_400(client):
 
 
 def test_port_officer_pending_register_success(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     monkeypatch.setattr(user_service, "create_pending_boat", lambda boat_number, mobile_number: "boat-1")
 
@@ -187,7 +187,7 @@ def test_port_officer_pending_register_success(client, monkeypatch):
 
 
 def test_port_officer_scan_number_missing_file_422(client):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     # FastAPI validation for required UploadFile => 422
     resp = client.post(f"{settings.API_V1_STR}/port-officer/boats/scan-number")
@@ -195,7 +195,7 @@ def test_port_officer_scan_number_missing_file_422(client):
 
 
 def test_port_officer_scan_number_empty_file_400(client):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     resp = client.post(
         f"{settings.API_V1_STR}/port-officer/boats/scan-number",
@@ -206,7 +206,7 @@ def test_port_officer_scan_number_empty_file_400(client):
 
 
 def test_port_officer_scan_number_success_boat_found(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     port_officer_endpoints = _import_port_officer_endpoints_safely()
 
@@ -242,7 +242,7 @@ def test_port_officer_scan_number_success_boat_found(client, monkeypatch):
 
 
 def test_port_officer_create_boat_movement_success(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     movement_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
@@ -292,7 +292,7 @@ def test_port_officer_create_boat_movement_success(client, monkeypatch):
 def test_port_officer_create_boat_movement_partial_arrival_sends_notifications_with_metadata(
     client, monkeypatch
 ):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     movement_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
@@ -351,7 +351,7 @@ def test_port_officer_create_boat_movement_partial_arrival_sends_notifications_w
 
 
 def test_port_officer_create_boat_movement_temporary_arrival_still_notifies(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     movement_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
@@ -397,7 +397,7 @@ def test_port_officer_create_boat_movement_temporary_arrival_still_notifies(clie
 
 
 def test_port_officer_create_boat_movement_temporary_departure_still_notifies(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     movement_at = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
@@ -443,7 +443,8 @@ def test_port_officer_create_boat_movement_temporary_departure_still_notifies(cl
 
 
 def test_port_officer_set_movement_crew_success(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
+    monkeypatch.setattr(trip_service, "get_movement_owner_user_id", lambda _movement_id: "off-1")
 
     monkeypatch.setattr(
         trip_service,
@@ -473,7 +474,8 @@ def test_port_officer_set_movement_crew_success(client, monkeypatch):
 
 
 def test_port_officer_set_movement_inventory_success(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
+    monkeypatch.setattr(trip_service, "get_movement_owner_user_id", lambda _movement_id: "off-1")
 
     monkeypatch.setattr(
         trip_service,
@@ -502,8 +504,20 @@ def test_port_officer_set_movement_inventory_success(client, monkeypatch):
     assert resp.json()["movement_id"] == "m-1"
 
 
+def test_port_officer_set_movement_inventory_forbidden_when_not_owner(client, monkeypatch):
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
+    monkeypatch.setattr(trip_service, "get_movement_owner_user_id", lambda _movement_id: "off-2")
+
+    resp = client.post(
+        f"{settings.API_V1_STR}/port-officer/movements/m-1/inventory",
+        json={"diesel_liters": 10.5, "ice_blocks": 2},
+    )
+    assert resp.status_code == 403
+
+
 def test_port_officer_get_movement_inventory_success(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
+    monkeypatch.setattr(trip_service, "get_movement_owner_user_id", lambda _movement_id: "off-1")
 
     monkeypatch.setattr(trip_service, "get_trip_movement_by_id", lambda _id: {"boat_id": "boat-1"})
     monkeypatch.setattr(trip_service, "get_departure_inventory", lambda _id: {"diesel_liters": 10.0, "ice_blocks": 1})
@@ -516,8 +530,10 @@ def test_port_officer_get_movement_inventory_success(client, monkeypatch):
     assert body["diesel_liters"] == pytest.approx(10.0)
 
 
-def test_port_officer_arrival_crew_scan_missing_inputs_400(client):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+def test_port_officer_arrival_crew_scan_missing_inputs_400(client, monkeypatch):
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
+    # Pass ownership check so we can hit request validation.
+    monkeypatch.setattr(trip_service, "get_movement_owner_user_id", lambda _movement_id: "off-1")
 
     resp = client.post(f"{settings.API_V1_STR}/port-officer/movements/m-1/arrival/crew/scan")
     assert resp.status_code == 400
@@ -525,7 +541,8 @@ def test_port_officer_arrival_crew_scan_missing_inputs_400(client):
 
 
 def test_port_officer_arrival_inventory_check_movement_not_found_404(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
+    monkeypatch.setattr(trip_service, "get_movement_owner_user_id", lambda _movement_id: "off-1")
 
     monkeypatch.setattr(trip_service, "get_trip_movement_by_id", lambda _id: None)
 
@@ -538,7 +555,8 @@ def test_port_officer_arrival_inventory_check_movement_not_found_404(client, mon
 
 
 def test_port_officer_arrival_inventory_check_success_marks_complete(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
+    monkeypatch.setattr(trip_service, "get_movement_owner_user_id", lambda _movement_id: "off-1")
 
     monkeypatch.setattr(trip_service, "get_trip_movement_by_id", lambda _id: {"boat_id": "boat-1"})
     monkeypatch.setattr(
@@ -681,7 +699,7 @@ def test_port_officer_reset_password_success(client, monkeypatch):
 
 
 def test_port_officer_identify_boat_success_formats_last_departure(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     monkeypatch.setattr(
         user_service,
@@ -721,7 +739,7 @@ def test_port_officer_identify_boat_success_formats_last_departure(client, monke
 
 
 def test_port_officer_trip_status_success_resolves_image_urls(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     monkeypatch.setattr(
         trip_service,
@@ -748,7 +766,7 @@ def test_port_officer_trip_status_success_resolves_image_urls(client, monkeypatc
 
 
 def test_port_officer_movement_history_success_resolves_image_url(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
     monkeypatch.setattr(
         trip_service,
@@ -777,7 +795,8 @@ def test_port_officer_movement_history_success_resolves_image_url(client, monkey
 
 
 def test_port_officer_arrival_crew_scan_success_with_departure_crew(client, monkeypatch):
-    client.app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
+    monkeypatch.setattr(trip_service, "get_movement_owner_user_id", lambda _movement_id: "off-1")
 
     monkeypatch.setattr(trip_service, "get_trip_movement_by_id", lambda _id: {"boat_id": "boat-1"})
     monkeypatch.setattr(
