@@ -455,6 +455,7 @@ def get_dashboard_today_counts() -> Dict[str, Any]:
                     FROM crew_members
                     WHERE created_at >= %s
                       AND created_at < %s
+                      AND is_register = TRUE
                       AND deleted_at IS NULL
                 ), 0) AS crew_registration,
                 COALESCE((
