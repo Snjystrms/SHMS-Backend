@@ -691,7 +691,7 @@ def get_boat_owner_dashboard(boat_owner_id: str) -> Dict[str, Any]:
                     m.movement_at
                 FROM boat_movements m
                 JOIN owned_boats ob ON ob.id = m.boat_id
-                WHERE m.movement_type IN ('arrival', 'temporary_arrival')
+                WHERE m.movement_type IN ('arrival', 'partial_arrival', 'temporary_arrival')
                   AND m.movement_at >= %s
                   AND m.movement_at < %s
                 ORDER BY m.boat_id, m.movement_at DESC
@@ -723,8 +723,7 @@ def get_boat_owner_dashboard(boat_owner_id: str) -> Dict[str, Any]:
             JOIN owned_boats ob ON ob.id = la.boat_id
             LEFT JOIN pending_request_counts prc ON prc.boat_id = ob.id
             LEFT JOIN started_auctions sa ON sa.movement_id = la.movement_id
-            WHERE COALESCE(prc.cnt, 0) > 0
-              AND sa.movement_id IS NULL
+            WHERE sa.movement_id IS NULL
             ORDER BY la.movement_at DESC
             """,
             (boat_owner_id, today_start_ist, today_end_ist),
