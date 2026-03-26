@@ -1,4 +1,5 @@
 """Trip status service: boat movement tracking (departure, arrival, partial arrival)."""
+import json
 import uuid
 from datetime import datetime, timezone, timedelta
 from threading import Lock
@@ -920,6 +921,124 @@ def get_movement_owner_user_id(movement_id: str) -> Optional[str]:
         conn.close()
 
 
+def update_movement_image_url(movement_id: str, image_url: str) -> bool:
+    """
+    Persist a movement-level image URL for a departure movement.
+
+    Used to store the departure group scan photo (annotated) so arrival compare can
+    fetch it later.
+
+    Safety:
+    - Only updates departure/temporary_departure movements.
+    - Does not overwrite an existing non-empty image_url.
+    """
+    movement_id = (movement_id or "").strip()
+    image_url = (image_url or "").strip()
+    if not movement_id or not image_url:
+        return False
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE boat_movements
+            SET image_url = %s, updated_at = NOW()
+            WHERE id = %s
+              AND movement_type IN ('departure', 'temporary_departure')
+              AND (image_url IS NULL OR NULLIF(TRIM(image_url), '') IS NULL)
+            """,
+            (image_url, movement_id),
+        )
+        updated = cur.rowcount > 0
+        if updated:
+            conn.commit()
+        return updated
+    except Exception as e:
+        print(f"Error updating movement image_url: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_departure_photo_crew_ids(movement_id: str, crew_ids: List[str]) -> bool:
+    """
+    Persist crew ids detected in the departure group photo.
+
+    This allows arrival crew scan to compare against departure photo without
+    re-running face identification on the departure image every time.
+
+    Safety:
+    - Only updates departure/temporary_departure movements.
+    - Overwrites the stored set (departure scan is the source of truth).
+    """
+    movement_id = (movement_id or "").strip()
+    if not movement_id:
+        return False
+    ids = [str(x) for x in (crew_ids or []) if x]
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE boat_movements
+            SET departure_photo_crew_ids = %s::jsonb, updated_at = NOW()
+            WHERE id = %s
+              AND movement_type IN ('departure', 'temporary_departure')
+            """,
+            (json.dumps(ids), movement_id),
+        )
+        updated = cur.rowcount > 0
+        if updated:
+            conn.commit()
+        return updated
+    except Exception as e:
+        print(f"Error updating departure_photo_crew_ids: {e}")
+        return False
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_departure_photo_crew_ids(movement_id: str) -> List[str]:
+    """Fetch crew ids detected in the departure group photo (may be empty)."""
+    movement_id = (movement_id or "").strip()
+    if not movement_id:
+        return []
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT departure_photo_crew_ids
+            FROM boat_movements
+            WHERE id = %s
+            """,
+            (movement_id,),
+        )
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return []
+        # psycopg2 returns jsonb as Python list/dict depending on adapters
+        val = row[0]
+        if isinstance(val, list):
+            return [str(x) for x in val if x]
+        if isinstance(val, str):
+            try:
+                parsed = json.loads(val)
+                return [str(x) for x in (parsed or []) if x]
+            except Exception:
+                return []
+        return []
+    except Exception as e:
+        print(f"Error fetching departure_photo_crew_ids: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
 def get_movement_with_departure_arrival(
     movement_id: str, boat_id: str
 ) -> Optional[Dict[str, Any]]:
@@ -995,6 +1114,82 @@ def get_departure_crew_with_details(movement_id: str) -> List[Dict[str, Any]]:
         cur.close()
         conn.close()
 
+
+def get_arrival_crew_reference_bundle(movement_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch arrival crew compare inputs in one DB round-trip/connection:
+    - movement (boat_id, movement_type)
+    - departure_photo_crew_ids (precomputed from departure scan)
+    - departure_crew list with details (for names/crops)
+    """
+    movement_id = (movement_id or "").strip()
+    if not movement_id:
+        return None
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT id, boat_id, movement_type, departure_photo_crew_ids
+            FROM boat_movements
+            WHERE id = %s
+              AND movement_type IN ('departure', 'temporary_departure', 'arrival', 'temporary_arrival')
+            """,
+            (movement_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        _, boat_id, movement_type, dep_ids_val = row
+
+        dep_ids: List[str] = []
+        if isinstance(dep_ids_val, list):
+            dep_ids = [str(x) for x in dep_ids_val if x]
+        elif isinstance(dep_ids_val, str):
+            try:
+                parsed = json.loads(dep_ids_val)
+                dep_ids = [str(x) for x in (parsed or []) if x]
+            except Exception:
+                dep_ids = []
+
+        # Departure crew attached to this movement (if any)
+        cur.execute(
+            """
+            SELECT cm.id, cm.name, cm.aadhaar_number, cm.phone, cm.is_pilot, bmc.crop_id
+            FROM boat_movement_crew bmc
+            JOIN crew_members cm ON cm.id = bmc.crew_member_id AND cm.deleted_at IS NULL
+            WHERE bmc.movement_id = %s
+            ORDER BY cm.name
+            """,
+            (movement_id,),
+        )
+        crew_rows = cur.fetchall()
+        departure_crew = [
+            {
+                "id": str(r[0]),
+                "name": r[1],
+                "aadhaar_number": r[2],
+                "phone": r[3],
+                "is_pilot": r[4] is True,
+                "crop_id": r[5],
+            }
+            for r in (crew_rows or [])
+        ]
+
+        return {
+            "movement_id": movement_id,
+            "boat_id": str(boat_id),
+            "movement_type": movement_type,
+            "departure_photo_crew_ids": dep_ids,
+            "departure_crew": departure_crew,
+        }
+    except Exception as e:
+        print(f"Error fetching arrival crew reference bundle: {e}")
+        return None
+    finally:
+        cur.close()
+        conn.close()
 
 def get_departure_inventory(movement_id: str) -> Optional[Dict[str, Any]]:
     """Return inventory record for this departure movement, or None."""

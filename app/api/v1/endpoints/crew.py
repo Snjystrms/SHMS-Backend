@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException, status, Depends
 from fastapi.responses import Response
 from app.services import face_service
+from app.services import trip_service
 from app.services import user_service as crud_user
 from app.core.config import settings
 from app.api import deps
@@ -479,6 +480,7 @@ async def scan_group_photo(
     request: Request,
     response: Response,
     file: UploadFile = File(...),
+    movement_id: Optional[str] = Form(None),
     current_user: dict = Depends(deps.get_admin_or_officer_user),
 ):
     """
@@ -515,12 +517,34 @@ async def scan_group_photo(
 
     # Save annotated image to uploads folder and return URL (served by StaticFiles at /uploads/...)
     annotated_image_url: Optional[str] = None
+    annotated_url_path: Optional[str] = None
     if annotated_bytes:
         t2 = perf_counter()
-        url_path = save_crew_scan_image(annotated_bytes)
+        annotated_url_path = save_crew_scan_image(annotated_bytes)
         timings_ms["save_annotated"] = (perf_counter() - t2) * 1000.0
-        if url_path:
-            annotated_image_url = resolve_image_url(url_path, str(request.base_url))
+        if annotated_url_path:
+            annotated_image_url = resolve_image_url(annotated_url_path, str(request.base_url))
+
+    # If movement_id provided, persist:
+    # - departure scan photo into boat_movements.image_url (for fetch/display)
+    # - the departure-photo reference crew ids (to avoid re-identifying departure on arrival scan)
+    if movement_id and annotated_url_path:
+        mid = (movement_id or "").strip()
+        if mid:
+            role = (current_user or {}).get("role")
+            if role == "officer":
+                owner_id = trip_service.get_movement_owner_user_id(mid)
+                if not owner_id:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Movement not found")
+                if owner_id != (current_user or {}).get("id"):
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to access this movement")
+            trip_service.update_movement_image_url(mid, annotated_url_path)
+            departure_ids = [
+                str(f.get("crew_member", {}).get("id"))
+                for f in faces_payload
+                if f.get("is_match") and f.get("crew_member") and f["crew_member"].get("id")
+            ]
+            trip_service.update_departure_photo_crew_ids(mid, departure_ids)
 
     faces: List[CrewFaceScanResult] = []
     request_base = str(request.base_url)

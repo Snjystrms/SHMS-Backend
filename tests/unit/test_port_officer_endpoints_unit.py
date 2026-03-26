@@ -798,12 +798,25 @@ def test_port_officer_arrival_crew_scan_success_with_departure_crew(client, monk
     client.app.dependency_overrides[deps.get_officer_user] = _as_officer
     monkeypatch.setattr(trip_service, "get_movement_owner_user_id", lambda _movement_id: "off-1")
 
-    monkeypatch.setattr(trip_service, "get_trip_movement_by_id", lambda _id: {"boat_id": "boat-1"})
     monkeypatch.setattr(
         trip_service,
-        "get_departure_crew_with_details",
-        lambda _id: [{"id": "c-1", "name": "Crew 1", "is_pilot": False}],
+        "get_arrival_crew_reference_bundle",
+        lambda _id: {
+            "movement_id": _id,
+            "boat_id": "boat-1",
+            "movement_type": "departure",
+            "departure_photo_crew_ids": ["c-1"],
+            "departure_crew": [{"id": "c-1", "name": "Crew 1", "is_pilot": False, "crop_id": None}],
+        },
     )
+
+    # Patch identify_faces_in_image so arrival scan sees no faces.
+    from app.api.v1.endpoints import port_officer as port_officer_endpoints
+
+    def _fake_identify(img_bytes):
+        return {"faces": []}
+
+    monkeypatch.setattr(port_officer_endpoints.face_service, "identify_faces_in_image", _fake_identify)
 
     resp = client.post(
         f"{settings.API_V1_STR}/port-officer/movements/m-1/arrival/crew/scan",
@@ -817,3 +830,56 @@ def test_port_officer_arrival_crew_scan_success_with_departure_crew(client, monk
     assert body["crew_at_departure"] == 1
     assert body["missing_crew_count"] == 1
 
+
+def test_crew_scan_group_photo_persists_movement_image_url(client, monkeypatch):
+    """
+    scan-group-photo is used at departure time. When movement_id is provided,
+    it should persist the annotated image URL path to boat_movements.image_url.
+    """
+    # Build a minimal app that mounts ONLY the crew router.
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.v1.endpoints import crew as crew_endpoints
+
+    app = FastAPI()
+    app.include_router(crew_endpoints.router, prefix=f"{settings.API_V1_STR}")
+    client2 = TestClient(app)
+
+    # Override auth dependency (officer is allowed).
+    app.dependency_overrides[deps.get_admin_or_officer_user] = _as_officer
+
+    # Ownership check for movement_id
+    monkeypatch.setattr(trip_service, "get_movement_owner_user_id", lambda _movement_id: "off-1")
+
+    # Stub face pipeline
+    monkeypatch.setattr(crew_endpoints.face_service, "identify_faces_in_image", lambda _b: {"faces": [], "summary": {"total_faces": 0, "matched_count": 0, "unmatched_count": 0}})
+    monkeypatch.setattr(crew_endpoints.face_service, "draw_face_boxes_on_image", lambda _b, _faces: b"pngbytes")
+
+    captured = {}
+
+    def _fake_save(content):
+        assert content == b"pngbytes"
+        return "/uploads/crew-scan/test.png"
+
+    monkeypatch.setattr(crew_endpoints, "save_crew_scan_image", _fake_save)
+
+    monkeypatch.setattr(
+        trip_service,
+        "update_movement_image_url",
+        lambda movement_id, image_url: captured.update({"movement_id": movement_id, "image_url": image_url}) or True,
+    )
+    monkeypatch.setattr(
+        trip_service,
+        "update_departure_photo_crew_ids",
+        lambda movement_id, crew_ids: captured.update({"dep_ids_movement_id": movement_id, "dep_ids": crew_ids}) or True,
+    )
+
+    resp = client2.post(
+        f"{settings.API_V1_STR}/crew-members/scan-group-photo",
+        files={"file": ("dep.png", b"fakeimg", "image/png")},
+        data={"movement_id": "m-1"},
+    )
+    assert resp.status_code == 200
+    assert captured["movement_id"] == "m-1"
+    assert captured["image_url"] == "/uploads/crew-scan/test.png"
+    assert captured["dep_ids_movement_id"] == "m-1"

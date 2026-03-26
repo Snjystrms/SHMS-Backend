@@ -149,6 +149,9 @@ class ArrivalUnidentifiedEntry(BaseModel):
 
     id: str
     crop_image_url: Optional[str] = None
+    matched_crew_member_id: Optional[str] = None
+    matched_name: Optional[str] = None
+    matched_is_register: Optional[bool] = None
     note: str = "This individual does not match any registered crew from this trip's departure."
 
 

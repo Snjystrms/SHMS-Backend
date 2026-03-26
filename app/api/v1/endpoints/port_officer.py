@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Port officer endpoints: boat identification by registration number."""
 from datetime import datetime, timezone
 from time import perf_counter
@@ -694,23 +696,30 @@ async def arrival_crew_scan(
             detail="Provide either an image file upload or image_url",
         )
 
+    # Fetch movement + departure_photo_crew_ids + departure crew details using one connection.
     t = perf_counter()
-    movement = trip_service.get_trip_movement_by_id(movement_id)
-    timings_ms["db_movement"] = (perf_counter() - t) * 1000.0
-    if not movement:
+    bundle = trip_service.get_arrival_crew_reference_bundle(movement_id)
+    timings_ms["db_reference_bundle"] = (perf_counter() - t) * 1000.0
+    if not bundle:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Movement not found or not a valid trip (departure/arrival).",
         )
-    boat_id = movement["boat_id"]
-    t = perf_counter()
-    departure_crew = trip_service.get_departure_crew_with_details(movement_id)
-    timings_ms["db_departure_crew"] = (perf_counter() - t) * 1000.0
-    departure_crew_ids = {c["id"] for c in departure_crew}
+    boat_id = bundle["boat_id"]
+    departure_photo_crew_ids = set(bundle.get("departure_photo_crew_ids") or [])
+    dep_faces = []  # not used in phase1 fast path
+    if not departure_photo_crew_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Departure photo crew reference not available for this movement; rescan departure group photo.",
+        )
+    departure_crew = bundle.get("departure_crew") or []
+    departure_crew_by_id: Dict[str, Dict] = {str(c["id"]): c for c in departure_crew if c.get("id")}
 
+    # --- Step B: identify faces in arrival image (global DB match) ---
     t = perf_counter()
     raw_result = face_service.identify_faces_in_image(image_bytes)
-    timings_ms["identify"] = (perf_counter() - t) * 1000.0
+    timings_ms["identify_arrival"] = (perf_counter() - t) * 1000.0
     if raw_result is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -724,131 +733,125 @@ async def arrival_crew_scan(
     unidentified_crew = []
     request_base = str(request.base_url)
 
+    # Crew crop URLs come from the departure crew table (if attached).
     crew_crop_url_by_id: Dict[str, Optional[str]] = {}
-    for c in departure_crew:
+    for cid, c in departure_crew_by_id.items():
         crop_id = c.get("crop_id")
         if crop_id:
-            crew_crop_url_by_id[c["id"]] = resolve_image_url(
+            crew_crop_url_by_id[cid] = resolve_image_url(
                 f"/uploads/crew-crops/{crop_id}.png",
                 request_base,
             )
         else:
-            crew_crop_url_by_id[c["id"]] = None
+            crew_crop_url_by_id[cid] = None
 
-    # When a departure crew list exists, keep the original behaviour:
-    # compare the arrival scan with the crew attached to this trip.
-    if departure_crew:
-        matched_ids = set()
-        for f in faces:
-            crew = f.get("crew_member")
-            if crew and f.get("is_match") and crew.get("id") in departure_crew_ids:
-                matched_ids.add(crew["id"])
+    arrival_known_ids = {
+        str(f["crew_member"]["id"])
+        for f in faces
+        if f.get("is_match") and f.get("crew_member") and f["crew_member"].get("id")
+    }
+    present_ids = departure_photo_crew_ids.intersection(arrival_known_ids)
+    missing_ids = departure_photo_crew_ids.difference(arrival_known_ids)
 
-        present_crew = [
-            ArrivalCrewMemberStatus(
-                crew_member_id=c["id"],
-                name=c["name"],
-                is_pilot=c.get("is_pilot", False),
-                status="present",
-                crop_image_url=crew_crop_url_by_id.get(c["id"]),
-            )
-            for c in departure_crew
-            if c["id"] in matched_ids
-        ]
-        missing_crew = [
-            ArrivalCrewMemberStatus(
-                crew_member_id=c["id"],
-                name=c["name"],
-                is_pilot=c.get("is_pilot", False),
-                status="missing",
-                crop_image_url=crew_crop_url_by_id.get(c["id"]),
-            )
-            for c in departure_crew
-            if c["id"] not in matched_ids
-        ]
-        # Persist crop images for each unmatched face and include in response.
-        for f in faces:
-            is_known_trip_match = bool(
-                f.get("is_match")
-                and f.get("crew_member")
-                and f["crew_member"].get("id") in departure_crew_ids
-            )
-            if is_known_trip_match:
-                continue
-            bbox = f.get("bbox")
-            crop_url: Optional[str] = None
-            if bbox and len(bbox) == 4:
-                crop_bytes = face_service.crop_face_from_image(image_bytes, bbox)
-                if crop_bytes:
-                    crop_id = uuid.uuid4().hex
-                    if save_crew_crop(crop_id, crop_bytes):
-                        crop_url = resolve_image_url(
-                            f"/uploads/crew-crops/{crop_id}.png",
-                            request_base,
-                        )
-            row_id = trip_service.save_unidentified_crew_member(
-                movement_id=movement_id,
-                crop_image_url=crop_url,
-            )
-            unidentified_crew.append(
-                ArrivalUnidentifiedEntry(
-                    id=row_id,
-                    crop_image_url=crop_url,
-                )
-            )
-        unidentified_count = len(unidentified_crew)
-    else:
-        # No departure crew recorded for this movement.
-        # Treat matched faces as arrival crew instead of counting them as "unidentified".
-        seen_present_ids = set()
-        for f in faces:
+    crew_details_by_id: Dict[str, Dict[str, object]] = {}
+    for cid in departure_photo_crew_ids:
+        c = departure_crew_by_id.get(cid)
+        if c:
+            crew_details_by_id[cid] = {
+                "name": c.get("name") or "",
+                "is_pilot": bool(c.get("is_pilot", False)),
+            }
+            continue
+        # Fall back to whatever the face match provides (if available).
+        fallback_name = ""
+        fallback_is_pilot = False
+        for f in dep_faces:
             crew = f.get("crew_member")
-            if crew and f.get("is_match") and crew.get("id"):
-                cid = crew["id"]
-                if cid in seen_present_ids:
-                    continue
-                seen_present_ids.add(cid)
-                present_crew.append(
-                    ArrivalCrewMemberStatus(
-                        crew_member_id=cid,
-                        name=crew.get("name", ""),
-                        is_pilot=crew.get("is_pilot", False),
-                        status="present",
-                        crop_image_url=None,
+            if f.get("is_match") and crew and str(crew.get("id")) == cid:
+                fallback_name = crew.get("name") or ""
+                fallback_is_pilot = bool(crew.get("is_pilot", False))
+                break
+        crew_details_by_id[cid] = {
+            "name": fallback_name,
+            "is_pilot": fallback_is_pilot,
+        }
+
+    present_crew = [
+        ArrivalCrewMemberStatus(
+            crew_member_id=cid,
+            name=str(crew_details_by_id.get(cid, {}).get("name", "")),
+            is_pilot=bool(crew_details_by_id.get(cid, {}).get("is_pilot", False)),
+            status="present",
+            crop_image_url=crew_crop_url_by_id.get(cid),
+        )
+        for cid in sorted(present_ids, key=lambda x: (str(crew_details_by_id.get(x, {}).get("name", "")) or "", x))
+    ]
+    missing_crew = [
+        ArrivalCrewMemberStatus(
+            crew_member_id=cid,
+            name=str(crew_details_by_id.get(cid, {}).get("name", "")),
+            is_pilot=bool(crew_details_by_id.get(cid, {}).get("is_pilot", False)),
+            status="missing",
+            crop_image_url=crew_crop_url_by_id.get(cid),
+        )
+        for cid in sorted(missing_ids, key=lambda x: (str(crew_details_by_id.get(x, {}).get("name", "")) or "", x))
+    ]
+
+    # Any arrival face that is not part of the departure-photo set is treated as unidentified.
+    #
+    # Important: face_service.draw_face_boxes_on_image uses `is_match` to color boxes (green/red).
+    # For this endpoint, we only want GREEN for matches that are also part of the departure-photo set.
+    faces_for_draw = []
+    for f in faces:
+        crew = f.get("crew_member")
+        matched_crew_id = str(crew.get("id")) if crew and crew.get("id") else None
+        is_known_in_departure_photo = bool(f.get("is_match") and matched_crew_id and matched_crew_id in departure_photo_crew_ids)
+
+        # Copy minimal fields for drawing so we don't mutate the original match info.
+        faces_for_draw.append(
+            {
+                "bbox": f.get("bbox"),
+                "is_match": bool(is_known_in_departure_photo),
+            }
+        )
+
+        if is_known_in_departure_photo:
+            continue
+        bbox = f.get("bbox")
+        crop_url: Optional[str] = None
+        if bbox and len(bbox) == 4:
+            crop_bytes = face_service.crop_face_from_image(image_bytes, bbox)
+            if crop_bytes:
+                crop_id = uuid.uuid4().hex
+                if save_crew_crop(crop_id, crop_bytes):
+                    crop_url = resolve_image_url(
+                        f"/uploads/crew-crops/{crop_id}.png",
+                        request_base,
                     )
-                )
-        # Any non-matching face at arrival is treated as unidentified.
-        for f in faces:
-            crew = f.get("crew_member")
-            if crew and f.get("is_match") and crew.get("id"):
-                continue
-            bbox = f.get("bbox")
-            crop_url: Optional[str] = None
-            if bbox and len(bbox) == 4:
-                crop_bytes = face_service.crop_face_from_image(image_bytes, bbox)
-                if crop_bytes:
-                    crop_id = uuid.uuid4().hex
-                    if save_crew_crop(crop_id, crop_bytes):
-                        crop_url = resolve_image_url(
-                            f"/uploads/crew-crops/{crop_id}.png",
-                            request_base,
-                        )
-            row_id = trip_service.save_unidentified_crew_member(
-                movement_id=movement_id,
+        row_id = trip_service.save_unidentified_crew_member(
+            movement_id=movement_id,
+            crop_image_url=crop_url,
+        )
+        matched_name = None
+        matched_is_register = None
+        if f.get("is_match") and crew:
+            matched_name = crew.get("name")
+            matched_is_register = crew.get("is_register")
+        unidentified_crew.append(
+            ArrivalUnidentifiedEntry(
+                id=row_id,
                 crop_image_url=crop_url,
+                matched_crew_member_id=matched_crew_id if f.get("is_match") else None,
+                matched_name=matched_name if f.get("is_match") else None,
+                matched_is_register=matched_is_register if f.get("is_match") else None,
             )
-            unidentified_crew.append(
-                ArrivalUnidentifiedEntry(
-                    id=row_id,
-                    crop_image_url=crop_url,
-                )
-            )
-        unidentified_count = len(unidentified_crew)
+        )
+    unidentified_count = len(unidentified_crew)
 
     # Generate annotated image with boxes for present/missing/unidentified
     annotated_image_url = None
     t = perf_counter()
-    annotated_bytes = face_service.draw_face_boxes_on_image(image_bytes, faces)
+    annotated_bytes = face_service.draw_face_boxes_on_image(image_bytes, faces_for_draw or faces)
     timings_ms["draw"] = (perf_counter() - t) * 1000.0
     if annotated_bytes:
         t = perf_counter()
@@ -868,7 +871,7 @@ async def arrival_crew_scan(
         movement_id=movement_id,
         boat_id=boat_id,
         annotated_image_url=annotated_image_url,
-        crew_at_departure=len(departure_crew),
+        crew_at_departure=len(departure_photo_crew_ids),
         crew_at_arrival=len(present_crew),
         missing_crew_count=len(missing_crew),
         unidentified_count=unidentified_count,
