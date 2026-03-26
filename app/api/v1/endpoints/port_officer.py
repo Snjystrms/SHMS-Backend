@@ -1,10 +1,11 @@
 """Port officer endpoints: boat identification by registration number."""
 from datetime import datetime, timezone
+from time import perf_counter
 import urllib.request
 import uuid
 from typing import Optional, Dict
 
-from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request
+from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request, Response
 from app.api import deps
 from app.core import security
 from app.core.config import settings
@@ -661,6 +662,7 @@ async def get_boat_movement_inventory(
 async def arrival_crew_scan(
     movement_id: str,
     request: Request,
+    response: Response,
     file: Optional[UploadFile] = File(None),
     image_url: Optional[str] = Form(None),
     current_user: dict = Depends(deps.get_officer_user),
@@ -673,29 +675,42 @@ async def arrival_crew_scan(
     - Unidentified: face detected at arrival that does not match any crew from this trip's departure (e.g. from another boat).
     Provide either file or image_url; if both provided, file takes precedence.
     """
+    timings_ms: Dict[str, float] = {}
+    t_total = perf_counter()
+
     _ensure_officer_owns_movement(movement_id, current_user.get("id"))
     image_bytes: Optional[bytes] = None
     if file and file.filename:
+        t = perf_counter()
         image_bytes = await file.read()
+        timings_ms["read_upload"] = (perf_counter() - t) * 1000.0
     if not image_bytes and image_url:
+        t = perf_counter()
         image_bytes = _fetch_image_bytes_from_url(image_url)
+        timings_ms["fetch_url"] = (perf_counter() - t) * 1000.0
     if not image_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Provide either an image file upload or image_url",
         )
 
+    t = perf_counter()
     movement = trip_service.get_trip_movement_by_id(movement_id)
+    timings_ms["db_movement"] = (perf_counter() - t) * 1000.0
     if not movement:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Movement not found or not a valid trip (departure/arrival).",
         )
     boat_id = movement["boat_id"]
+    t = perf_counter()
     departure_crew = trip_service.get_departure_crew_with_details(movement_id)
+    timings_ms["db_departure_crew"] = (perf_counter() - t) * 1000.0
     departure_crew_ids = {c["id"] for c in departure_crew}
 
+    t = perf_counter()
     raw_result = face_service.identify_faces_in_image(image_bytes)
+    timings_ms["identify"] = (perf_counter() - t) * 1000.0
     if raw_result is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -832,11 +847,22 @@ async def arrival_crew_scan(
 
     # Generate annotated image with boxes for present/missing/unidentified
     annotated_image_url = None
+    t = perf_counter()
     annotated_bytes = face_service.draw_face_boxes_on_image(image_bytes, faces)
+    timings_ms["draw"] = (perf_counter() - t) * 1000.0
     if annotated_bytes:
+        t = perf_counter()
         annotated_path = save_crew_scan_image(annotated_bytes)
+        timings_ms["save_annotated"] = (perf_counter() - t) * 1000.0
         if annotated_path:
             annotated_image_url = resolve_image_url(annotated_path, request_base)
+
+    timings_ms["total"] = (perf_counter() - t_total) * 1000.0
+    response.headers["Server-Timing"] = ", ".join(
+        f"{name};dur={ms:.1f}"
+        for name, ms in timings_ms.items()
+        if ms is not None and ms >= 0.0
+    )
 
     return ArrivalCrewCheckResponse(
         movement_id=movement_id,

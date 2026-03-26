@@ -810,6 +810,7 @@ def test_port_officer_arrival_crew_scan_success_with_departure_crew(client, monk
         files={"file": ("arr.png", b"fakeimg", "image/png")},
     )
     assert resp.status_code == 200
+    assert "Server-Timing" in resp.headers
     body = resp.json()
     assert body["movement_id"] == "m-1"
     assert body["boat_id"] == "boat-1"
