@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     # Default uses ArcFace Buffalo_L pipeline as per FACE_RECOGNITION_SYSTEM_UPGRADE_2026.md
     FACE_MODEL_NAME: str = "buffalo_s"
     # GPU id for InsightFace (0 = first GPU, -1 = CPU)
-    FACE_CTX_ID: int = 0
+    FACE_CTX_ID: int = -1
 
     # YOLO human detection (first stage filter for group images)
     YOLO_ENABLED: bool = True

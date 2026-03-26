@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import uuid
+from time import perf_counter
 from urllib.parse import urlparse
 
 import numpy as np
@@ -476,6 +477,7 @@ async def get_scan_result_crop(crop_id: str):
 )
 async def scan_group_photo(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),
     current_user: dict = Depends(deps.get_admin_or_officer_user),
 ):
@@ -492,7 +494,11 @@ async def scan_group_photo(
             detail="Image file is empty",
         )
 
+    timings_ms: Dict[str, float] = {}
+
+    t0 = perf_counter()
     raw_result = face_service.identify_faces_in_image(image_bytes)
+    timings_ms["identify"] = (perf_counter() - t0) * 1000.0
     if raw_result is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -503,17 +509,22 @@ async def scan_group_photo(
     summary = raw_result.get("summary", {}) or {}
 
     # Annotated image with boxes drawn (PIL): green = match, red = no match
+    t1 = perf_counter()
     annotated_bytes = face_service.draw_face_boxes_on_image(image_bytes, faces_payload)
+    timings_ms["draw"] = (perf_counter() - t1) * 1000.0
 
     # Save annotated image to uploads folder and return URL (served by StaticFiles at /uploads/...)
     annotated_image_url: Optional[str] = None
     if annotated_bytes:
+        t2 = perf_counter()
         url_path = save_crew_scan_image(annotated_bytes)
+        timings_ms["save_annotated"] = (perf_counter() - t2) * 1000.0
         if url_path:
             annotated_image_url = resolve_image_url(url_path, str(request.base_url))
 
     faces: List[CrewFaceScanResult] = []
     request_base = str(request.base_url)
+    crop_total = 0.0
     for f in faces_payload:
         crew_member_data = f.get("crew_member")
         crew_member_obj = None
@@ -524,6 +535,7 @@ async def scan_group_photo(
         crop_image_url: Optional[str] = None
         bbox = f.get("bbox")
         if bbox and len(bbox) == 4:
+            tc = perf_counter()
             crop_bytes = face_service.crop_face_from_image(image_bytes, bbox)
             if crop_bytes:
                 crop_id = str(uuid.uuid4())
@@ -536,6 +548,7 @@ async def scan_group_photo(
                 path = request.url_for("get_scan_result_crop", crop_id=crop_id)
                 path_str = str(path)
                 crop_image_url = resolve_image_url(path_str, request_base)
+            crop_total += (perf_counter() - tc) * 1000.0
 
         faces.append(
             CrewFaceScanResult(
@@ -551,6 +564,16 @@ async def scan_group_photo(
     total_faces = int(summary.get("total_faces", len(faces)))
     matched_count = int(summary.get("matched_count", 0))
     unmatched_count = int(summary.get("unmatched_count", total_faces - matched_count))
+
+    timings_ms["crop_total"] = crop_total
+    timings_ms["total"] = sum(v for k, v in timings_ms.items() if k != "total")
+    # Emit high-signal server timing so Chrome DevTools can break down latency.
+    # https://developer.chrome.com/docs/devtools/network/reference/#timing
+    response.headers["Server-Timing"] = ", ".join(
+        f"{name};dur={ms:.1f}"
+        for name, ms in timings_ms.items()
+        if ms is not None and ms >= 0.0
+    )
 
     return CrewGroupScanResponse(
         faces=faces,
