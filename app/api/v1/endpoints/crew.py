@@ -9,7 +9,7 @@ import numpy as np
 import requests
 
 from typing import Dict, List, Optional
-from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException, status, Depends
+from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException, status, Depends, BackgroundTasks
 from fastapi.responses import Response
 from app.services import face_service
 from app.services import trip_service
@@ -25,7 +25,14 @@ from app.schemas.crew import (
 )
 from app.schemas.user import ForgotPasswordRequest
 from app.utils.otp_helpers import get_sms
-from app.utils.uploads import save_crew_scan_image, save_crew_crop, load_crew_crop, save_crew_embedding, load_crew_embedding
+from app.utils.uploads import (
+    save_crew_scan_image,
+    save_crew_scan_image_with_id,
+    save_crew_crop,
+    load_crew_crop,
+    save_crew_embedding,
+    load_crew_embedding,
+)
 from app.utils.url_helpers import resolve_image_url
 
 
@@ -254,7 +261,9 @@ async def create_crew_member(
         )
 
     # Check for duplicates
-    existing_user_id, existing_username, distance = face_service.find_match(embedding)
+    matched_crew, distance = face_service.find_match(embedding)
+    existing_user_id = matched_crew.get("id") if matched_crew else None
+    existing_username = matched_crew.get("name") if matched_crew else None
     if distance is not None and distance < settings.FACE_DUPLICATE_THRESHOLD:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -479,6 +488,7 @@ async def get_scan_result_crop(crop_id: str):
 async def scan_group_photo(
     request: Request,
     response: Response,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     movement_id: Optional[str] = Form(None),
     current_user: dict = Depends(deps.get_admin_or_officer_user),
@@ -509,10 +519,26 @@ async def scan_group_photo(
 
     faces_payload = raw_result.get("faces", [])
     summary = raw_result.get("summary", {}) or {}
+    timings_ms["find_match_total"] = float(summary.get("find_match_total_ms", 0.0) or 0.0)
+    timings_ms["crew_fetch_total"] = float(summary.get("crew_fetch_total_ms", 0.0) or 0.0)
+    logger.info(
+        "scan_group_photo identify summary: total_faces=%s matched=%s unmatched=%s find_match_total_ms=%.1f crew_fetch_total_ms=%.1f",
+        summary.get("total_faces", len(faces_payload)),
+        summary.get("matched_count", 0),
+        summary.get("unmatched_count", 0),
+        timings_ms["find_match_total"],
+        timings_ms["crew_fetch_total"],
+    )
+
+    normalized_img = face_service.get_normalized_pil_image(image_bytes)
 
     # Annotated image with boxes drawn (PIL): green = match, red = no match
     t1 = perf_counter()
-    annotated_bytes = face_service.draw_face_boxes_on_image(image_bytes, faces_payload)
+    annotated_bytes = face_service.draw_face_boxes_on_image(
+        image_bytes,
+        faces_payload,
+        normalized_image=normalized_img,
+    )
     timings_ms["draw"] = (perf_counter() - t1) * 1000.0
 
     # Save annotated image to uploads folder and return URL (served by StaticFiles at /uploads/...)
@@ -520,7 +546,12 @@ async def scan_group_photo(
     annotated_url_path: Optional[str] = None
     if annotated_bytes:
         t2 = perf_counter()
-        annotated_url_path = save_crew_scan_image(annotated_bytes)
+        if settings.SCAN_ASYNC_PERSISTENCE:
+            scan_id = uuid.uuid4().hex
+            annotated_url_path = f"/uploads/crew-scan/{scan_id}.png"
+            background_tasks.add_task(save_crew_scan_image_with_id, scan_id, annotated_bytes)
+        else:
+            annotated_url_path = save_crew_scan_image(annotated_bytes)
         timings_ms["save_annotated"] = (perf_counter() - t2) * 1000.0
         if annotated_url_path:
             annotated_image_url = resolve_image_url(annotated_url_path, str(request.base_url))
@@ -560,15 +591,25 @@ async def scan_group_photo(
         bbox = f.get("bbox")
         if bbox and len(bbox) == 4:
             tc = perf_counter()
-            crop_bytes = face_service.crop_face_from_image(image_bytes, bbox)
+            crop_bytes = face_service.crop_face_from_image(
+                image_bytes,
+                bbox,
+                normalized_image=normalized_img,
+            )
             if crop_bytes:
                 crop_id = str(uuid.uuid4())
                 _scan_result_crops[crop_id] = crop_bytes
-                save_crew_crop(crop_id, crop_bytes)
+                if settings.SCAN_ASYNC_PERSISTENCE:
+                    background_tasks.add_task(save_crew_crop, crop_id, crop_bytes)
+                else:
+                    save_crew_crop(crop_id, crop_bytes)
                 emb = f.get("embedding")
                 if emb is not None:
                     _scan_result_embeddings[crop_id] = emb
-                    save_crew_embedding(crop_id, emb)
+                    if settings.SCAN_ASYNC_PERSISTENCE:
+                        background_tasks.add_task(save_crew_embedding, crop_id, emb)
+                    else:
+                        save_crew_embedding(crop_id, emb)
                 path = request.url_for("get_scan_result_crop", crop_id=crop_id)
                 path_str = str(path)
                 crop_image_url = resolve_image_url(path_str, request_base)

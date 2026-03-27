@@ -2,6 +2,7 @@ import io
 import logging
 import uuid
 from functools import lru_cache
+from time import perf_counter
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -126,7 +127,7 @@ def _decode_image(
             exif_orientation,
         )
 
-    target_max_side = 640
+    target_max_side = max(256, int(settings.FACE_DETECT_MAX_SIDE or 512))
     max_side = max(h, w)
     if max_side > target_max_side:
         scale = float(target_max_side) / float(max_side)
@@ -230,6 +231,7 @@ def draw_face_boxes_on_image(
     image_bytes: bytes,
     faces: List[Dict[str, Any]],
     box_width: int = 4,
+    normalized_image: Optional[Image.Image] = None,
 ) -> Optional[bytes]:
     """
     Draw bounding boxes on the image using PIL. Green = match, red = no match.
@@ -239,10 +241,13 @@ def draw_face_boxes_on_image(
     """
     if not image_bytes or not faces:
         return None
-    norm = _load_normalized_image(image_bytes)
-    if norm is None:
-        return None
-    img, _ = norm
+    if normalized_image is not None:
+        img = normalized_image.copy()
+    else:
+        norm = _load_normalized_image(image_bytes)
+        if norm is None:
+            return None
+        img, _ = norm
     w, h = img.size
 
     draw = ImageDraw.Draw(img)
@@ -271,7 +276,11 @@ def draw_face_boxes_on_image(
     return out_bytes
 
 
-def crop_face_from_image(image_bytes: bytes, bbox: List[float]) -> Optional[bytes]:
+def crop_face_from_image(
+    image_bytes: bytes,
+    bbox: List[float],
+    normalized_image: Optional[Image.Image] = None,
+) -> Optional[bytes]:
     """
     Crop the face/person region from the image using bbox [x1, y1, x2, y2].
     Bbox must be in normalized (EXIF-applied) image coordinates.
@@ -279,10 +288,13 @@ def crop_face_from_image(image_bytes: bytes, bbox: List[float]) -> Optional[byte
     """
     if not image_bytes or not bbox or len(bbox) != 4:
         return None
-    norm = _load_normalized_image(image_bytes)
-    if norm is None:
-        return None
-    img, _ = norm
+    if normalized_image is not None:
+        img = normalized_image
+    else:
+        norm = _load_normalized_image(image_bytes)
+        if norm is None:
+            return None
+        img, _ = norm
     w, h = img.size
     x1, y1, x2, y2 = [int(round(x)) for x in bbox]
     # Clamp to image bounds: left>=0, top>=0, right<=width, bottom<=height
@@ -390,6 +402,8 @@ def identify_faces_in_image(
     yolo_model = _get_yolo_model()
 
     results: List[Dict[str, Any]] = []
+    match_total_ms = 0.0
+    crew_fetch_total_ms = 0.0
 
     def _scale_and_append(bbox_det: List[float], **kwargs: Any) -> None:
         bbox_orig = _scale_bbox_to_original(
@@ -453,13 +467,15 @@ def identify_faces_in_image(
             faces = face_app.get(person_crop)
             for face in faces:
                 embedding = face.embedding
-                crew_id, _, distance = find_match(embedding)
+                match_start = perf_counter()
+                crew_member, distance = find_match(embedding)
+                match_total_ms += (perf_counter() - match_start) * 1000.0
 
                 is_match = False
-                crew_member: Optional[Dict[str, Any]] = None
-                if distance is not None and distance <= settings.FACE_MATCH_THRESHOLD and crew_id:
-                    crew_member = get_crew_member_by_id(str(crew_id))
-                    is_match = crew_member is not None
+                if distance is not None and distance <= settings.FACE_MATCH_THRESHOLD and crew_member:
+                    is_match = True
+                else:
+                    crew_member = None
 
                 local_bbox = getattr(face, "bbox", None)
                 if local_bbox is not None:
@@ -500,13 +516,15 @@ def identify_faces_in_image(
 
         for face in faces:
             embedding = face.embedding
-            crew_id, _, distance = find_match(embedding)
+            match_start = perf_counter()
+            crew_member, distance = find_match(embedding)
+            match_total_ms += (perf_counter() - match_start) * 1000.0
 
             is_match = False
-            crew_member: Optional[Dict[str, Any]] = None
-            if distance is not None and distance <= settings.FACE_MATCH_THRESHOLD and crew_id:
-                crew_member = get_crew_member_by_id(str(crew_id))
-                is_match = crew_member is not None
+            if distance is not None and distance <= settings.FACE_MATCH_THRESHOLD and crew_member:
+                is_match = True
+            else:
+                crew_member = None
 
             bbox_det = (
                 [float(x) for x in getattr(face, "bbox", [])]
@@ -545,33 +563,63 @@ def identify_faces_in_image(
             "total_faces": len(results),
             "matched_count": matched_count,
             "unmatched_count": unmatched_count,
+            "find_match_total_ms": match_total_ms,
+            # Crew data now comes from find_match join, so this remains 0 by design.
+            "crew_fetch_total_ms": crew_fetch_total_ms,
         },
     }
 
-def find_match(embedding):
+def find_match(embedding: np.ndarray) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
     conn = get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute("""
-            SELECT cm.id, cm.name, cfe.embedding <=> %s::vector AS distance
+            SELECT
+                cm.id,
+                cm.name,
+                cm.aadhaar_number,
+                cm.email,
+                cm.phone,
+                cm.emergency_contact_number,
+                cm.is_pilot,
+                cm.is_register,
+                cfe.embedding <=> %s::vector AS distance
             FROM crew_face_embeddings cfe
             JOIN crew_members cm ON cm.id = cfe.crew_member_id
+            WHERE cm.deleted_at IS NULL
             ORDER BY distance
             LIMIT 1;
         """, (embedding.tolist(),))
 
         row = cur.fetchone()
         if row:
-            crew_member_id, name, distance = row
-            return crew_member_id, name, distance
+            return {
+                "id": str(row[0]),
+                "name": row[1],
+                "aadhaar_number": row[2],
+                "email": row[3],
+                "contact_number": row[4],
+                "emergency_contact_number": row[5],
+                "is_pilot": row[6] if row[6] is not None else False,
+                "is_register": row[7] if row[7] is not None else False,
+            }, float(row[8]) if row[8] is not None else None
 
-        return None, None, None
+        return None, None
     except Exception as e:
         print(f"Error finding match: {e}")
-        return None, None, None
+        return None, None
     finally:
         cur.close()
         conn.close()
+
+
+def get_normalized_pil_image(image_bytes: bytes) -> Optional[Image.Image]:
+    """Return EXIF-normalized RGB PIL image for reusing draw/crop in one request."""
+    norm = _load_normalized_image(image_bytes)
+    if norm is None:
+        return None
+    img, _ = norm
+    return img
 
 def register_user_minimal(
     name: str,

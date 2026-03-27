@@ -146,3 +146,21 @@ def save_crew_scan_image(content: bytes, upload_root: Optional[str] = None) -> O
     except OSError:
         return None
     return f"/uploads/crew-scan/{name}"
+
+
+def save_crew_scan_image_with_id(scan_id: str, content: bytes, upload_root: Optional[str] = None) -> Optional[str]:
+    """
+    Save annotated crew scan image to uploads/crew-scan/<scan_id>.png.
+    Returns URL path for static serving, e.g. /uploads/crew-scan/<scan_id>.png.
+    """
+    if not scan_id or not content:
+        return None
+    root = upload_root or os.path.join(os.getcwd(), "uploads", "crew-scan")
+    os.makedirs(root, exist_ok=True)
+    file_path = os.path.join(root, f"{scan_id}.png")
+    try:
+        with open(file_path, "wb") as f:
+            f.write(content)
+    except OSError:
+        return None
+    return f"/uploads/crew-scan/{scan_id}.png"

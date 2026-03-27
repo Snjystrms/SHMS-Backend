@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     YOLO_MODEL_NAME: str = "yolo26n.pt"
     # Confidence threshold for person detections
     YOLO_CONF_THRESHOLD: float = 0.25
+    # Max image side used for detection/embedding pre-processing in group scans.
+    # Lower values reduce latency at possible accuracy tradeoff.
+    FACE_DETECT_MAX_SIDE: int = 512
+    # If true, persist scan artifacts (annotated image/crops/embeddings) in background.
+    # This reduces request latency for /crew-members/scan-group-photo.
+    SCAN_ASYNC_PERSISTENCE: bool = True
 
     # SMS (forgot password OTP). Provider: mock | twilio | msg91 | fast2sms
     SMS_PROVIDER: str = "mock"
