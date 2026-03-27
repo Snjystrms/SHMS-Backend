@@ -54,7 +54,7 @@ from app.schemas.dashboard import (
 )
 from app.utils.sms import get_sms_provider
 from app.utils.otp_helpers import send_otp_for_phone
-from app.utils.uploads import save_crew_scan_image, save_crew_crop
+from app.utils.uploads import save_crew_crop
 from app.utils.url_helpers import resolve_image_url
 
 
@@ -798,22 +798,10 @@ async def arrival_crew_scan(
     ]
 
     # Any arrival face that is not part of the departure-photo set is treated as unidentified.
-    #
-    # Important: face_service.draw_face_boxes_on_image uses `is_match` to color boxes (green/red).
-    # For this endpoint, we only want GREEN for matches that are also part of the departure-photo set.
-    faces_for_draw = []
     for f in faces:
         crew = f.get("crew_member")
         matched_crew_id = str(crew.get("id")) if crew and crew.get("id") else None
         is_known_in_departure_photo = bool(f.get("is_match") and matched_crew_id and matched_crew_id in departure_photo_crew_ids)
-
-        # Copy minimal fields for drawing so we don't mutate the original match info.
-        faces_for_draw.append(
-            {
-                "bbox": f.get("bbox"),
-                "is_match": bool(is_known_in_departure_photo),
-            }
-        )
 
         if is_known_in_departure_photo:
             continue
@@ -848,18 +836,6 @@ async def arrival_crew_scan(
         )
     unidentified_count = len(unidentified_crew)
 
-    # Generate annotated image with boxes for present/missing/unidentified
-    annotated_image_url = None
-    t = perf_counter()
-    annotated_bytes = face_service.draw_face_boxes_on_image(image_bytes, faces_for_draw or faces)
-    timings_ms["draw"] = (perf_counter() - t) * 1000.0
-    if annotated_bytes:
-        t = perf_counter()
-        annotated_path = save_crew_scan_image(annotated_bytes)
-        timings_ms["save_annotated"] = (perf_counter() - t) * 1000.0
-        if annotated_path:
-            annotated_image_url = resolve_image_url(annotated_path, request_base)
-
     timings_ms["total"] = (perf_counter() - t_total) * 1000.0
     response.headers["Server-Timing"] = ", ".join(
         f"{name};dur={ms:.1f}"
@@ -870,7 +846,6 @@ async def arrival_crew_scan(
     return ArrivalCrewCheckResponse(
         movement_id=movement_id,
         boat_id=boat_id,
-        annotated_image_url=annotated_image_url,
         crew_at_departure=len(departure_photo_crew_ids),
         crew_at_arrival=len(present_crew),
         missing_crew_count=len(missing_crew),
@@ -940,7 +915,6 @@ async def arrival_crew_submit(
             "unidentified_count": len(unidentified_ids),
             "report_missing_person": bool(body.report_missing_person),
             "notes": (body.notes or "").strip() or None,
-            "annotated_image_url": body.annotated_image_url,
             "submitted_by_user_id": current_user.get("id"),
             "submitted_at": datetime.now(timezone.utc).isoformat(),
         },

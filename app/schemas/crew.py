@@ -45,23 +45,24 @@ class CrewMemberResponse(CrewMemberBase):
         from_attributes = True
 
 
+class CrewMemberScanResponse(BaseModel):
+    """Minimal crew fields exposed in group scan responses."""
+    id: str
+    name: str
+
+
 class CrewFaceScanResult(BaseModel):
-    """One detected face and its match (if any). No bbox in response; boxes are on annotated_image_url only."""
+    """One detected face and its match (if any)."""
     det_score: float
     distance: Optional[float] = None
     is_match: bool
-    crew_member: Optional[CrewMemberResponse] = None
+    crew_member: Optional[CrewMemberScanResponse] = None
     crop_id: Optional[str] = None  # UUID for crew face crop; use when attaching crew to movement for image_url in history.
-    crop_image_url: Optional[str] = None  # One-time URL to GET the cropped face/person PNG for frontend display.
 
 
 class CrewGroupScanResponse(BaseModel):
     """Response for group photo scan (crew identification)."""
     faces: List[CrewFaceScanResult]
-    total_faces: int
-    matched_count: int
-    unmatched_count: int
-    annotated_image_url: Optional[str] = None  # URL to GET the processed PNG (green=match, red=no match). One-time use.
 
 
 # ----- Crew scanned history (per officer) -----

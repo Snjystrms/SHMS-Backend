@@ -156,11 +156,10 @@ class ArrivalUnidentifiedEntry(BaseModel):
 
 
 class ArrivalCrewCheckResponse(BaseModel):
-    """Result of arrival crew scan: annotated_image_url + counts + present/missing/unidentified lists."""
+    """Result of arrival crew scan with counts + present/missing/unidentified lists."""
 
     movement_id: str
     boat_id: str
-    annotated_image_url: Optional[str] = None
     crew_at_departure: int
     crew_at_arrival: int  # number identified (present) in scan
     missing_crew_count: int
@@ -177,7 +176,6 @@ class ArrivalCrewSubmitRequest(BaseModel):
     unidentified_crew_ids: List[str] = []
     report_missing_person: bool = False
     notes: Optional[str] = None
-    annotated_image_url: Optional[str] = None
 
 
 class ArrivalCrewSubmitResponse(BaseModel):
