@@ -43,6 +43,8 @@ from app.schemas.trip import (
     TripDetailsCrewMember,
     TripDetailsDeparture,
     TripDetailsArrival,
+    TripDetailsMissingCrewMember,
+    TripDetailsUnidentifiedCrewMember,
 )
 from app.schemas.boat_owner_sales import BoatOwnerSalesReportResponse, SalesReportFilter
 
@@ -407,7 +409,24 @@ async def get_boat_trip_details(
     movement_type = movement.get("movement_type")
     crew_raw = trip_service.get_departure_crew_with_details(latest_movement_id)
     inv = trip_service.get_departure_inventory(latest_movement_id)
+    discrepancy = trip_service.get_arrival_crew_discrepancy(latest_movement_id)
     crew_count = movement.get("crew_count") or len(crew_raw)
+    crew_name_by_id = {str(c.get("id")): c.get("name") or "" for c in crew_raw if c.get("id")}
+    missing_crew_members = [
+        TripDetailsMissingCrewMember(
+            id=crew_id,
+            name=crew_name_by_id.get(crew_id, ""),
+        )
+        for crew_id in (discrepancy.get("missing_crew_ids") or [])
+    ]
+    unidentified_crew_members = [
+        TripDetailsUnidentifiedCrewMember(
+            id=str(item.get("id")),
+            crop_image_url=item.get("crop_image_url"),
+        )
+        for item in (discrepancy.get("unidentified_crew") or [])
+        if item.get("id")
+    ]
 
     departure = None
     arrival = None
@@ -448,10 +467,10 @@ async def get_boat_trip_details(
         total_crew=crew_count,
         list_of_items_while_departure=_inventory_to_list(inv),
         list_of_missing_items=[],
-        missing_crew_members=[],
-        unidentified_crew_members=[],
+        missing_crew_members=missing_crew_members,
+        unidentified_crew_members=unidentified_crew_members,
         reason_for_loss=None,
-        additional_details=None,
+        additional_details=discrepancy.get("notes"),
         crew_members=_crew_to_list(crew_raw),
         partial_arrival_reason=movement.get("partial_arrival_reason"),
         partial_arrival_details=movement.get("partial_arrival_details"),

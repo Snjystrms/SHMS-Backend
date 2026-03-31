@@ -706,15 +706,16 @@ async def arrival_crew_scan(
             detail="Movement not found or not a valid trip (departure/arrival).",
         )
     boat_id = bundle["boat_id"]
-    departure_photo_crew_ids = set(bundle.get("departure_photo_crew_ids") or [])
-    dep_faces = []  # not used in phase1 fast path
-    if not departure_photo_crew_ids:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Departure photo crew reference not available for this movement; rescan departure group photo.",
-        )
     departure_crew = bundle.get("departure_crew") or []
     departure_crew_by_id: Dict[str, Dict] = {str(c["id"]): c for c in departure_crew if c.get("id")}
+    departure_photo_crew_ids = set(bundle.get("departure_photo_crew_ids") or [])
+    dep_faces = []  # not used in phase1 fast path
+    departure_reference_ids = set(departure_crew_by_id.keys()) or departure_photo_crew_ids
+    if not departure_reference_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Departure crew reference not available for this movement; attach crew or rescan departure group photo.",
+        )
 
     # --- Step B: identify faces in arrival image (global DB match) ---
     t = perf_counter()
@@ -750,11 +751,11 @@ async def arrival_crew_scan(
         for f in faces
         if f.get("is_match") and f.get("crew_member") and f["crew_member"].get("id")
     }
-    present_ids = departure_photo_crew_ids.intersection(arrival_known_ids)
-    missing_ids = departure_photo_crew_ids.difference(arrival_known_ids)
+    present_ids = departure_reference_ids.intersection(arrival_known_ids)
+    missing_ids = departure_reference_ids.difference(arrival_known_ids)
 
     crew_details_by_id: Dict[str, Dict[str, object]] = {}
-    for cid in departure_photo_crew_ids:
+    for cid in departure_reference_ids:
         c = departure_crew_by_id.get(cid)
         if c:
             crew_details_by_id[cid] = {
@@ -797,13 +798,15 @@ async def arrival_crew_scan(
         for cid in sorted(missing_ids, key=lambda x: (str(crew_details_by_id.get(x, {}).get("name", "")) or "", x))
     ]
 
-    # Any arrival face that is not part of the departure-photo set is treated as unidentified.
+    # Any arrival face that is not part of the departure reference set is treated as unidentified.
     for f in faces:
         crew = f.get("crew_member")
         matched_crew_id = str(crew.get("id")) if crew and crew.get("id") else None
-        is_known_in_departure_photo = bool(f.get("is_match") and matched_crew_id and matched_crew_id in departure_photo_crew_ids)
+        is_known_in_departure_reference = bool(
+            f.get("is_match") and matched_crew_id and matched_crew_id in departure_reference_ids
+        )
 
-        if is_known_in_departure_photo:
+        if is_known_in_departure_reference:
             continue
         bbox = f.get("bbox")
         crop_url: Optional[str] = None
@@ -846,7 +849,7 @@ async def arrival_crew_scan(
     return ArrivalCrewCheckResponse(
         movement_id=movement_id,
         boat_id=boat_id,
-        crew_at_departure=len(departure_photo_crew_ids),
+        crew_at_departure=len(departure_reference_ids),
         crew_at_arrival=len(present_crew),
         missing_crew_count=len(missing_crew),
         unidentified_count=unidentified_count,

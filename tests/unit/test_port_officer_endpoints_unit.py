@@ -831,6 +831,52 @@ def test_port_officer_arrival_crew_scan_success_with_departure_crew(client, monk
     assert body["missing_crew_count"] == 1
 
 
+def test_port_officer_arrival_crew_scan_uses_attached_departure_crew_over_photo_subset(client, monkeypatch):
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
+    monkeypatch.setattr(trip_service, "get_movement_owner_user_id", lambda _movement_id: "off-1")
+
+    monkeypatch.setattr(
+        trip_service,
+        "get_arrival_crew_reference_bundle",
+        lambda _id: {
+            "movement_id": _id,
+            "boat_id": "boat-1",
+            "movement_type": "departure",
+            "departure_photo_crew_ids": ["c-2"],
+            "departure_crew": [
+                {"id": "c-1", "name": "Crew 1", "is_pilot": False, "crop_id": None},
+                {"id": "c-2", "name": "Crew 2", "is_pilot": False, "crop_id": None},
+            ],
+        },
+    )
+
+    from app.api.v1.endpoints import port_officer as port_officer_endpoints
+
+    def _fake_identify(img_bytes):
+        return {
+            "faces": [
+                {
+                    "is_match": True,
+                    "crew_member": {"id": "c-2", "name": "Crew 2", "is_pilot": False},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(port_officer_endpoints.face_service, "identify_faces_in_image", _fake_identify)
+
+    resp = client.post(
+        f"{settings.API_V1_STR}/port-officer/movements/m-1/arrival/crew/scan",
+        files={"file": ("arr.png", b"fakeimg", "image/png")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["crew_at_departure"] == 2
+    assert body["crew_at_arrival"] == 1
+    assert body["missing_crew_count"] == 1
+    assert [x["crew_member_id"] for x in body["present_crew"]] == ["c-2"]
+    assert [x["crew_member_id"] for x in body["missing_crew"]] == ["c-1"]
+
+
 def test_crew_scan_group_photo_persists_movement_image_url(client, monkeypatch):
     """
     scan-group-photo is used at departure time. When movement_id is provided,

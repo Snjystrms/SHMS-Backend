@@ -36,6 +36,14 @@ class _PooledConnection:
         self._pool = pool_obj
 
     def close(self):
+        if getattr(self._conn, "closed", 1):
+            self._pool.putconn(self._conn, close=True)
+            return
+        try:
+            self._conn.rollback()
+        except Exception:
+            self._pool.putconn(self._conn, close=True)
+            return
         self._pool.putconn(self._conn)
 
     def __getattr__(self, name):
@@ -46,6 +54,18 @@ def get_db_connection():
     """Returns a connection from the pool. Call close() to return it."""
     p = _get_pool()
     conn = p.getconn()
+    try:
+        if getattr(conn, "closed", 0):
+            p.putconn(conn, close=True)
+            conn = p.getconn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+    except (psycopg2.InterfaceError, psycopg2.OperationalError):
+        try:
+            p.putconn(conn, close=True)
+        except Exception:
+            pass
+        conn = p.getconn()
     return _PooledConnection(conn, p)
 
 

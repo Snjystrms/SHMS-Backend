@@ -529,12 +529,70 @@ def test_boat_owner_trip_details_at_harbour_success(client, monkeypatch):
     )
     monkeypatch.setattr(boat_owner_endpoints.trip_service, "get_departure_crew_with_details", lambda _id: [])
     monkeypatch.setattr(boat_owner_endpoints.trip_service, "get_departure_inventory", lambda _id: {})
+    monkeypatch.setattr(
+        boat_owner_endpoints.trip_service,
+        "get_arrival_crew_discrepancy",
+        lambda _id: {"missing_crew_ids": [], "unidentified_crew": [], "notes": None},
+    )
 
     resp = client.get(f"{settings.API_V1_STR}/boat-owners/boats/boat-1/trip-details")
     assert resp.status_code == 200
     body = resp.json()
     assert body["view_type"] == "at_harbour"
     assert body["trip_status"] == "arrived"
+
+
+def test_boat_owner_trip_details_at_harbour_includes_missing_crew(client, monkeypatch):
+    client.app.dependency_overrides[deps.get_boat_owner_user] = _as_boat_owner
+
+    monkeypatch.setattr(
+        boat_owner_endpoints.crud_user,
+        "get_boat_by_id",
+        lambda _id: {"id": _id, "boat_owner_id": "bo-1", "boat_number": "MH-1", "boat_name": "B", "boat_type": "T"},
+    )
+    monkeypatch.setattr(
+        boat_owner_endpoints.trip_service,
+        "get_boat_trip_status",
+        lambda _id: {"trip_status": "arrived", "latest_movement_id": "mov-1"},
+    )
+    monkeypatch.setattr(
+        boat_owner_endpoints.trip_service,
+        "get_movement_with_departure_arrival",
+        lambda _movement_id, _boat_id: {
+            "movement_type": "arrival",
+            "movement_at": "2026-01-02T00:00:00Z",
+            "departure_at": "2026-01-01T00:00:00Z",
+            "harbor_name": "mumbai",
+            "port_name": "mumbai",
+            "crew_count": 2,
+            "partial_arrival_reason": None,
+            "partial_arrival_details": None,
+        },
+    )
+    monkeypatch.setattr(
+        boat_owner_endpoints.trip_service,
+        "get_departure_crew_with_details",
+        lambda _id: [
+            {"id": "c-1", "name": "Crew 1", "is_pilot": False},
+            {"id": "c-2", "name": "Crew 2", "is_pilot": False},
+        ],
+    )
+    monkeypatch.setattr(boat_owner_endpoints.trip_service, "get_departure_inventory", lambda _id: {})
+    monkeypatch.setattr(
+        boat_owner_endpoints.trip_service,
+        "get_arrival_crew_discrepancy",
+        lambda _id: {
+            "missing_crew_ids": ["c-2"],
+            "unidentified_crew": [],
+            "notes": "One crew missing on arrival",
+        },
+    )
+
+    resp = client.get(f"{settings.API_V1_STR}/boat-owners/boats/boat-1/trip-details")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["missing_crew_members"] == [{"id": "c-2", "name": "Crew 2"}]
+    assert body["additional_details"] == "One crew missing on arrival"
 
 
 def test_boat_owner_update_my_boat_wrong_owner_404(client, monkeypatch):

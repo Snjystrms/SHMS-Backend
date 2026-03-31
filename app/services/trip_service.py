@@ -310,7 +310,7 @@ def get_movement_history(
 
         if movement_type == "departure":
             # Arrival reuses the same movement row with movement_type=arrival but keeps departure_at.
-            # List by actual departure instant, not current movement_type.
+            # Only show departures that were finalized by attaching inventory.
             cur.execute(
                 f"""
                 SELECT
@@ -326,12 +326,17 @@ def get_movement_history(
                 FROM boat_movements m
                 JOIN boats b ON b.id = m.boat_id AND b.deleted_at IS NULL
                 WHERE (
-                    m.movement_type IN ('departure', 'temporary_departure')
+                    m.movement_type = 'departure'
                     OR (
                         m.departure_at IS NOT NULL
                         AND m.movement_type IN ('arrival', 'temporary_arrival')
                     )
                 )
+                  AND EXISTS (
+                      SELECT 1
+                      FROM boat_movement_inventory bmi
+                      WHERE bmi.movement_id = m.id
+                  )
                   AND COALESCE(m.departure_at, m.movement_at) >= %s
                   {officer_clause}
                 ORDER BY COALESCE(m.departure_at, m.movement_at) DESC
@@ -482,7 +487,7 @@ def get_dashboard_today_counts(officer_user_id: Optional[str] = None) -> Dict[st
         crew_reg_clause = " AND registered_by_user_id = %s" if officer_user_id else ""
         params: List[Any] = []
 
-        # departures
+        # departures: only finalized departures with attached inventory
         params.extend([start, end])
         if officer_user_id:
             params.append(officer_user_id)
@@ -504,9 +509,14 @@ def get_dashboard_today_counts(officer_user_id: Optional[str] = None) -> Dict[st
             SELECT
                 COALESCE((
                     SELECT COUNT(*)
-                    FROM boat_movements
+                    FROM boat_movements m
                     WHERE COALESCE(departure_at, movement_at) >= %s
                       AND COALESCE(departure_at, movement_at) < %s
+                      AND EXISTS (
+                          SELECT 1
+                          FROM boat_movement_inventory bmi
+                          WHERE bmi.movement_id = m.id
+                      )
                       {mv_officer_clause}
                 ), 0) AS departures,
                 COALESCE((
@@ -1153,14 +1163,16 @@ def get_arrival_crew_reference_bundle(movement_id: str) -> Optional[Dict[str, An
             except Exception:
                 dep_ids = []
 
-        # Departure crew attached to this movement (if any)
+        # Departure crew attached to this movement (if any).
+        # Keep the movement_crew row even if the crew member profile is now missing/soft-deleted,
+        # so arrival comparison still uses the actual departure manifest.
         cur.execute(
             """
-            SELECT cm.id, cm.name, cm.aadhaar_number, cm.phone, cm.is_pilot, bmc.crop_id
+            SELECT bmc.crew_member_id, cm.name, cm.aadhaar_number, cm.phone, cm.is_pilot, bmc.crop_id
             FROM boat_movement_crew bmc
-            JOIN crew_members cm ON cm.id = bmc.crew_member_id AND cm.deleted_at IS NULL
+            LEFT JOIN crew_members cm ON cm.id = bmc.crew_member_id AND cm.deleted_at IS NULL
             WHERE bmc.movement_id = %s
-            ORDER BY cm.name
+            ORDER BY COALESCE(cm.name, ''), bmc.crew_member_id
             """,
             (movement_id,),
         )
@@ -1753,6 +1765,85 @@ def save_unidentified_crew_member(movement_id: str, crop_image_url: Optional[str
     except Exception:
         conn.rollback()
         raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_arrival_crew_discrepancy(movement_id: str) -> Dict[str, Any]:
+    """
+    Return the latest persisted arrival crew discrepancy for a movement.
+    Missing crew ids come from the arrival discrepancy notification metadata.
+    Unidentified crew details come from unidentified_crew_members rows referenced in that metadata.
+    """
+    movement_id = (movement_id or "").strip()
+    if not movement_id:
+        return {
+            "missing_crew_ids": [],
+            "unidentified_crew": [],
+            "report_missing_person": False,
+            "notes": None,
+        }
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT metadata
+            FROM notifications
+            WHERE type = 'arrival_crew_discrepancy'
+              AND metadata->>'movement_id' = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (movement_id,),
+        )
+        row = cur.fetchone()
+        metadata = (row[0] or {}) if row else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        missing_ids = [str(x) for x in (metadata.get("missing_crew_ids") or []) if x]
+        unidentified_ids = [str(x) for x in (metadata.get("unidentified_crew_ids") or []) if x]
+
+        unidentified_by_id: Dict[str, Dict[str, Any]] = {}
+        if unidentified_ids:
+            cur.execute(
+                """
+                SELECT id, crop_image_url
+                FROM unidentified_crew_members
+                WHERE movement_id = %s
+                  AND id = ANY(%s)
+                """,
+                (movement_id, unidentified_ids),
+            )
+            for uid, crop_image_url in cur.fetchall() or []:
+                unidentified_by_id[str(uid)] = {
+                    "id": str(uid),
+                    "crop_image_url": crop_image_url,
+                }
+
+        return {
+            "missing_crew_ids": missing_ids,
+            "unidentified_crew": [
+                unidentified_by_id.get(
+                    uid,
+                    {"id": uid, "crop_image_url": None},
+                )
+                for uid in unidentified_ids
+            ],
+            "report_missing_person": bool(metadata.get("report_missing_person", False)),
+            "notes": metadata.get("notes"),
+        }
+    except Exception as e:
+        print(f"Error fetching arrival crew discrepancy: {e}")
+        return {
+            "missing_crew_ids": [],
+            "unidentified_crew": [],
+            "report_missing_person": False,
+            "notes": None,
+        }
     finally:
         cur.close()
         conn.close()
