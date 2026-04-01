@@ -99,6 +99,19 @@ def load_crew_crop(crop_id: str, upload_root: Optional[str] = None) -> Optional[
         return None
 
 
+def get_crew_crop_static_path(crop_id: Optional[str], upload_root: Optional[str] = None) -> Optional[str]:
+    """
+    Return the static /uploads path for a crew crop only when the file exists.
+    """
+    if not crop_id:
+        return None
+    root = upload_root or os.path.join(os.getcwd(), "uploads", "crew-crops")
+    file_path = os.path.join(root, f"{crop_id}.png")
+    if not os.path.exists(file_path):
+        return None
+    return f"/uploads/crew-crops/{crop_id}.png"
+
+
 def save_crew_embedding(crop_id: str, embedding: List[float], upload_root: Optional[str] = None) -> bool:
     """Save face embedding for a crop. Used when registering from scan-group-photo."""
     if not crop_id or not embedding:

@@ -94,6 +94,23 @@ def get_user_by_identifier(identifier: str):
 
 def get_admin_or_officer_by_identifier(identifier: str):
     """Fetch admin/officer user by email or phone (used for password-based login)."""
+    users = get_admin_or_officer_candidates(identifier)
+    return users[0] if users else None
+
+
+def get_admin_or_officer_candidates(identifier: str) -> List[Dict[str, Any]]:
+    """
+    Fetch all admin/officer users matching an email or phone identifier.
+
+    This is intentionally broader than `get_admin_or_officer_by_identifier` so
+    the login endpoint can verify the submitted password against every matching
+    candidate and avoid flaky 401s when duplicate phone/email data already
+    exists in the database.
+    """
+    normalized = (identifier or "").strip()
+    if not normalized:
+        return []
+
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -102,17 +119,27 @@ def get_admin_or_officer_by_identifier(identifier: str):
             SELECT u.id, u.name, u.email, u.password, u.role_id, r.name as role_name
             FROM users u
             JOIN roles r ON u.role_id = r.id
-            WHERE (u.email = %s OR u.phone = %s)
+            WHERE (
+                    LOWER(TRIM(COALESCE(u.email, ''))) = LOWER(TRIM(%s))
+                 OR TRIM(COALESCE(u.phone, '')) = TRIM(%s)
+                  )
               AND r.name IN ('admin', 'officer')
               AND u.deleted_at IS NULL
-            ORDER BY CASE WHEN r.name = 'admin' THEN 0 ELSE 1 END
-            LIMIT 1
+            ORDER BY
+                CASE
+                    WHEN LOWER(TRIM(COALESCE(u.email, ''))) = LOWER(TRIM(%s)) THEN 0
+                    ELSE 1
+                END,
+                CASE WHEN r.name = 'admin' THEN 0 ELSE 1 END,
+                u.updated_at DESC NULLS LAST,
+                u.created_at DESC NULLS LAST,
+                u.id DESC
             """,
-            (identifier, identifier),
+            (normalized, normalized, normalized),
         )
-        row = cur.fetchone()
-        if row:
-            return {
+        rows = cur.fetchall() or []
+        return [
+            {
                 "id": str(row[0]),
                 "name": row[1],
                 "email": row[2],
@@ -120,10 +147,11 @@ def get_admin_or_officer_by_identifier(identifier: str):
                 "role_id": row[4],
                 "role": row[5],
             }
-        return None
+            for row in rows
+        ]
     except Exception as e:
         print(f"Error fetching admin/officer by identifier: {e}")
-        return None
+        return []
     finally:
         cur.close()
         conn.close()

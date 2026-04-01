@@ -148,6 +148,34 @@ def test_port_officer_crew_scanned_history_success(client, monkeypatch):
     assert body["records"][0]["crew_id"] == "c-1"
 
 
+def test_port_officer_crew_scanned_history_resolves_image_url(client, monkeypatch):
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
+
+    monkeypatch.setattr(
+        trip_service,
+        "get_registered_crew_history",
+        lambda officer_user_id, date_filter, is_register, offset, limit: [
+            {
+                "crew_id": "c-1",
+                "crew_name": "Crew",
+                "phone_number": "999",
+                "emergency_contact_number": None,
+                "aadhaar_number": None,
+                "is_register": True,
+                "movement_at": "2026-01-01T00:00:00Z",
+                "image_url": "/uploads/crew-crops/crop-1.png",
+            }
+        ],
+    )
+
+    resp = client.get(
+        f"{settings.API_V1_STR}/port-officer/crew-scanned/history?date_filter=today&page=1&page_size=10"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["records"][0]["image_url"].startswith("http://testserver/uploads/crew-crops/")
+
+
 def test_port_officer_pending_register_validation_400(client):
     client.app.dependency_overrides[deps.get_officer_user] = _as_officer
 
@@ -735,7 +763,43 @@ def test_port_officer_identify_boat_success_formats_last_departure(client, monke
     assert body["registration_no"] == "MH-01-1234"
     assert body["boat_id"] == "boat-1"
     assert body["is_pending_registration"] is False
-    assert body["last_logged_departure"] is not None
+    assert body["last_logged_departure"] == "Jan 01, 05:30 PM"
+
+
+def test_port_officer_identify_boat_formats_string_departure_in_ist(client, monkeypatch):
+    client.app.dependency_overrides[deps.get_officer_user] = _as_officer
+
+    monkeypatch.setattr(
+        user_service,
+        "get_boat_by_number_with_owner",
+        lambda _n: {
+            "id": "boat-1",
+            "boat_number": "MH-01-1234",
+            "boat_name": "B1",
+            "owner_name": "Owner",
+            "harbor_name": "Mumbai",
+            "boat_type": "Trawler",
+        },
+    )
+    monkeypatch.setattr(
+        trip_service,
+        "get_boat_trip_status",
+        lambda _boat_id: {
+            "boat_id": "boat-1",
+            "boat_number": "MH-01-1234",
+            "trip_status": "sailing",
+            "movement_type": "departure",
+            "departure_details": {
+                "departure_at": "2026-04-01T09:15:00Z",
+                "from_port": "Mumbai",
+                "status_label": "Sailing",
+            },
+        },
+    )
+
+    resp = client.post(f"{settings.API_V1_STR}/port-officer/boats/identify/MH-01-1234")
+    assert resp.status_code == 200
+    assert resp.json()["last_logged_departure"] == "Apr 01, 02:45 PM"
 
 
 def test_port_officer_trip_status_success_resolves_image_urls(client, monkeypatch):

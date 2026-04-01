@@ -6,6 +6,7 @@ from time import perf_counter
 import urllib.request
 import uuid
 from typing import Optional, Dict
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, status, Depends, UploadFile, File, Form, Request, Response
 from app.api import deps
@@ -95,6 +96,21 @@ def _get_sms():
 
 
 router = APIRouter()
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _format_departure_display(dep_at: Optional[datetime]) -> Optional[str]:
+    """Render departure timestamps consistently in IST for officer UIs."""
+    if dep_at is None:
+        return None
+    if isinstance(dep_at, str):
+        try:
+            dep_at = datetime.fromisoformat(dep_at.replace("Z", "+00:00"))
+        except ValueError:
+            return dep_at
+    if dep_at.tzinfo is None:
+        dep_at = dep_at.replace(tzinfo=timezone.utc)
+    return dep_at.astimezone(_IST).strftime("%b %d, %I:%M %p")
 
 
 def _ensure_officer_owns_movement(movement_id: str, officer_user_id: Optional[str]) -> None:
@@ -228,7 +244,7 @@ async def identify_boat(
     last_departure = None
     if status_data and status_data.get("departure_details"):
         dep_at = status_data["departure_details"]["departure_at"]
-        last_departure = dep_at.strftime("%b %d, %I:%M %p")
+        last_departure = _format_departure_display(dep_at)
 
     return BoatIdentifyResponse(
         registration_no=boat["boat_number"],
@@ -279,7 +295,7 @@ async def scan_boat_number(
             last_departure = None
             if status_data and status_data.get("departure_details"):
                 dep_at = status_data["departure_details"]["departure_at"]
-                last_departure = dep_at.strftime("%b %d, %I:%M %p")
+                last_departure = _format_departure_display(dep_at)
             boat_details = BoatIdentifyResponse(
                 registration_no=boat["boat_number"],
                 vessel_name=boat.get("boat_name"),
@@ -396,6 +412,7 @@ async def get_crew_scanned_history(
     is_register: Optional[bool] = None,
     page: int = 1,
     page_size: int = 10,
+    request: Request = None,
     current_user: dict = Depends(deps.get_officer_user),
 ):
     """
@@ -427,6 +444,10 @@ async def get_crew_scanned_history(
         offset=offset,
         limit=page_size,
     )
+    request_base = str(request.base_url) if request else None
+    for record in records_raw:
+        if record.get("image_url"):
+            record["image_url"] = resolve_image_url(record["image_url"], request_base)
     records = [CrewScannedHistoryItem(**r) for r in records_raw]
     return CrewScannedHistoryResponse(
         date_filter=date_filter,

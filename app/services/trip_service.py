@@ -6,6 +6,7 @@ from threading import Lock
 from typing import Optional, Dict, Any, Tuple, List
 from zoneinfo import ZoneInfo
 from app.db.session import get_db_connection
+from app.utils.uploads import get_crew_crop_static_path
 
 _DASHBOARD_COUNTS_CACHE_TTL_SECONDS = 10
 _dashboard_counts_cache_lock = Lock()
@@ -1650,7 +1651,7 @@ def get_scanned_crew_history(
                 "boat_name": r[8],
                 "boat_number": r[9],
                 "movement_at": r[10].isoformat() if r[10] else None,
-                "image_url": f"/uploads/crew-crops/{r[11]}.png" if r[11] else None,
+                "image_url": get_crew_crop_static_path(r[11]),
             }
             for r in rows
         ]
@@ -1738,7 +1739,7 @@ def get_registered_crew_history(
                 "emergency_contact_number": r[4],
                 "is_register": bool(r[5]) if r[5] is not None else False,
                 "movement_at": r[6].isoformat() if r[6] else None,
-                "image_url": f"/uploads/crew-crops/{r[7]}.png" if r[7] else None,
+                "image_url": get_crew_crop_static_path(r[7]),
             }
             for r in rows
         ]

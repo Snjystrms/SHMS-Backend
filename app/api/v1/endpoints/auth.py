@@ -1,6 +1,7 @@
 import asyncio
 from datetime import timedelta
 from typing import Callable, Optional
+from secrets import compare_digest
 from fastapi import APIRouter, Depends, HTTPException, status, Form
 from app.core import security
 from app.core.config import settings
@@ -85,21 +86,35 @@ class LoginRequestForm:
 async def login(form_data: LoginRequestForm = Depends()):
     """Login endpoint - accepts mobile number only."""
     identifier = (form_data.mobile_number or "").strip()
-    # Password-based login is intended for admin/officer users.
-    # If another role shares the same phone, prefer admin/officer records.
-    user = crud_user.get_admin_or_officer_by_identifier(identifier)
-    if not user:
+    # Password-based login is intended for admin/officer users. Verify the
+    # submitted password across all matching admin/officer accounts so duplicate
+    # phone/email rows do not cause intermittent 401s.
+    candidate_users = crud_user.get_admin_or_officer_candidates(identifier)
+    if not candidate_users:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect mobile number",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Run bcrypt in thread pool to avoid blocking event loop
-    verified = await asyncio.to_thread(
-        security.verify_password, form_data.password, user["password"]
-    )
-    if not verified:
+    user = None
+    verified = False
+    for candidate in candidate_users:
+        stored_password = candidate.get("password")
+        if not stored_password:
+            continue
+        # Plain-text fallback is still supported for legacy records.
+        if not (stored_password.startswith("$2b$") or stored_password.startswith("$2a$")):
+            verified = compare_digest(form_data.password, stored_password)
+        else:
+            verified = await asyncio.to_thread(
+                security.verify_password, form_data.password, stored_password
+            )
+        if verified:
+            user = candidate
+            break
+
+    if not user or not verified:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect password",
