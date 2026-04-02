@@ -86,10 +86,10 @@ class LoginRequestForm:
 async def login(form_data: LoginRequestForm = Depends()):
     """Login endpoint - accepts mobile number only."""
     identifier = (form_data.mobile_number or "").strip()
-    # Password-based login is intended for admin/officer users. Verify the
-    # submitted password across all matching admin/officer accounts so duplicate
-    # phone/email rows do not cause intermittent 401s.
-    candidate_users = crud_user.get_admin_or_officer_candidates(identifier)
+    # Verify the submitted password across every matching password-bearing user.
+    # Production data currently contains duplicate active phone numbers across
+    # roles, so validating only the first row can produce intermittent 401s.
+    candidate_users = crud_user.get_password_login_candidates(identifier)
     if not candidate_users:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

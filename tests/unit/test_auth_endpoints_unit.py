@@ -19,7 +19,7 @@ def test_auth_login_uses_matching_candidate_when_duplicate_phone_exists(monkeypa
 
     monkeypatch.setattr(
         user_service,
-        "get_admin_or_officer_candidates",
+        "get_password_login_candidates",
         lambda _identifier: [
             {
                 "id": "off-wrong",
@@ -59,7 +59,7 @@ def test_auth_login_hashes_only_the_matching_legacy_plaintext_user(monkeypatch):
 
     monkeypatch.setattr(
         user_service,
-        "get_admin_or_officer_candidates",
+        "get_password_login_candidates",
         lambda _identifier: [
             {
                 "id": "off-wrong",
@@ -94,3 +94,43 @@ def test_auth_login_hashes_only_the_matching_legacy_plaintext_user(monkeypatch):
 
     assert resp.status_code == 200
     assert updated == {"user_id": "off-right", "password": "hashed-password"}
+
+
+def test_auth_login_supports_non_officer_password_role_when_phone_is_shared(monkeypatch):
+    client = _client()
+    buyer_hash = get_password_hash("buyer-password")
+
+    monkeypatch.setattr(
+        user_service,
+        "get_password_login_candidates",
+        lambda _identifier: [
+            {
+                "id": "off-wrong",
+                "name": "Wrong Officer",
+                "email": "wrong@example.com",
+                "password": get_password_hash("some-other-password"),
+                "role_id": 2,
+                "role": "officer",
+            },
+            {
+                "id": "buyer-right",
+                "name": "Right Buyer",
+                "email": "buyer@example.com",
+                "password": buyer_hash,
+                "role_id": 4,
+                "role": "buyer",
+            },
+        ],
+    )
+    monkeypatch.setattr(auth_endpoints.security, "create_access_token", lambda **_kwargs: "token-xyz")
+
+    resp = client.post(
+        f"{settings.API_V1_STR}/auth/login",
+        data={"mobile_number": "7340507799", "password": "buyer-password"},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["access_token"] == "token-xyz"
+    assert body["user"]["id"] == "buyer-right"
+    assert body["user"]["role"] == "buyer"

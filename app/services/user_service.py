@@ -92,10 +92,105 @@ def get_user_by_identifier(identifier: str):
         conn.close()
 
 
+def _map_auth_user_row(row) -> Dict[str, Any]:
+    return {
+        "id": str(row[0]),
+        "name": row[1],
+        "email": row[2],
+        "password": row[3],
+        "role_id": row[4],
+        "role": row[5],
+    }
+
+
+def _get_users_by_phone_for_role(phone: str, role_name: str) -> List[Dict[str, Any]]:
+    """Fetch all active users for a phone/role pair in deterministic order."""
+    normalized_phone = (phone or "").strip()
+    if not normalized_phone:
+        return []
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT u.id, u.name, u.email, u.password, u.role_id, r.name as role_name
+            FROM users u
+            JOIN roles r ON u.role_id = r.id
+            WHERE TRIM(COALESCE(u.phone, '')) = TRIM(%s)
+              AND r.name = %s
+              AND u.deleted_at IS NULL
+            ORDER BY
+                CASE
+                    WHEN NULLIF(TRIM(COALESCE(u.password, '')), '') IS NOT NULL THEN 0
+                    ELSE 1
+                END,
+                u.updated_at DESC NULLS LAST,
+                u.created_at DESC NULLS LAST,
+                u.id DESC
+            """,
+            (normalized_phone, role_name),
+        )
+        return [_map_auth_user_row(row) for row in (cur.fetchall() or [])]
+    except Exception as e:
+        print(f"Error fetching {role_name} by phone: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
+
+
 def get_admin_or_officer_by_identifier(identifier: str):
     """Fetch admin/officer user by email or phone (used for password-based login)."""
     users = get_admin_or_officer_candidates(identifier)
     return users[0] if users else None
+
+
+def get_password_login_candidates(identifier: str) -> List[Dict[str, Any]]:
+    """
+    Fetch all active users that can authenticate with a password.
+
+    Multiple active rows can share a phone number in production data, including
+    rows from different roles. The login endpoint verifies the submitted
+    password against every matching candidate to avoid intermittent 401s when
+    PostgreSQL returns a different matching row on each request.
+    """
+    normalized = (identifier or "").strip()
+    if not normalized:
+        return []
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT u.id, u.name, u.email, u.password, u.role_id, r.name as role_name
+            FROM users u
+            JOIN roles r ON u.role_id = r.id
+            WHERE (
+                    LOWER(TRIM(COALESCE(u.email, ''))) = LOWER(TRIM(%s))
+                 OR TRIM(COALESCE(u.phone, '')) = TRIM(%s)
+                  )
+              AND NULLIF(TRIM(COALESCE(u.password, '')), '') IS NOT NULL
+              AND u.deleted_at IS NULL
+            ORDER BY
+                CASE
+                    WHEN LOWER(TRIM(COALESCE(u.email, ''))) = LOWER(TRIM(%s)) THEN 0
+                    ELSE 1
+                END,
+                u.updated_at DESC NULLS LAST,
+                u.created_at DESC NULLS LAST,
+                u.id DESC
+            """,
+            (normalized, normalized, normalized),
+        )
+        return [_map_auth_user_row(row) for row in (cur.fetchall() or [])]
+    except Exception as e:
+        print(f"Error fetching password-login candidates: {e}")
+        return []
+    finally:
+        cur.close()
+        conn.close()
 
 
 def get_admin_or_officer_candidates(identifier: str) -> List[Dict[str, Any]]:
@@ -457,64 +552,30 @@ def get_buyers_paginated(
 
 def get_agent_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     """Fetch agent by phone. Returns None if not found or not agent role."""
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT u.id, u.name, u.email, u.phone
-            FROM users u
-            JOIN roles r ON u.role_id = r.id
-            WHERE u.phone = %s AND r.name = 'agent' AND u.deleted_at IS NULL
-            """,
-            (phone.strip(),),
-        )
-        row = cur.fetchone()
-        if row:
-            return {
-                "id": str(row[0]),
-                "name": row[1],
-                "email": row[2],
-                "phone": row[3],
-            }
+    users = _get_users_by_phone_for_role(phone, "agent")
+    if not users:
         return None
-    except Exception as e:
-        print(f"Error fetching agent by phone: {e}")
-        return None
-    finally:
-        cur.close()
-        conn.close()
+    user = users[0]
+    return {
+        "id": user["id"],
+        "name": user["name"],
+        "email": user["email"],
+        "phone": (phone or "").strip(),
+    }
 
 
 def get_buyer_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     """Fetch buyer by phone. Returns None if not found or not buyer role."""
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT u.id, u.name, u.email, u.phone
-            FROM users u
-            JOIN roles r ON u.role_id = r.id
-            WHERE u.phone = %s AND r.name = 'buyer' AND u.deleted_at IS NULL
-            """,
-            (phone.strip(),),
-        )
-        row = cur.fetchone()
-        if row:
-            return {
-                "id": str(row[0]),
-                "name": row[1],
-                "email": row[2],
-                "phone": row[3],
-            }
+    users = _get_users_by_phone_for_role(phone, "buyer")
+    if not users:
         return None
-    except Exception as e:
-        print(f"Error fetching buyer by phone: {e}")
-        return None
-    finally:
-        cur.close()
-        conn.close()
+    user = users[0]
+    return {
+        "id": user["id"],
+        "name": user["name"],
+        "email": user["email"],
+        "phone": (phone or "").strip(),
+    }
 
 def get_user_by_id(user_id: str):
     """Fetch a user by their ID."""
@@ -603,28 +664,16 @@ def delete_user(user_id: str):
 
 def get_officer_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     """Fetch port officer by phone. Returns None if not found or not officer."""
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT u.id, u.name, u.email, u.phone
-            FROM users u
-            JOIN roles r ON u.role_id = r.id
-            WHERE u.phone = %s AND r.name = 'officer' AND u.deleted_at IS NULL
-            """,
-            (phone.strip(),)
-        )
-        row = cur.fetchone()
-        if row:
-            return {"id": str(row[0]), "name": row[1], "email": row[2], "phone": row[3]}
+    users = _get_users_by_phone_for_role(phone, "officer")
+    if not users:
         return None
-    except Exception as e:
-        print(f"Error fetching officer by phone: {e}")
-        return None
-    finally:
-        cur.close()
-        conn.close()
+    user = users[0]
+    return {
+        "id": user["id"],
+        "name": user["name"],
+        "email": user["email"],
+        "phone": (phone or "").strip(),
+    }
 
 
 def create_temp_user(name: str, phone: str, aadhaar_number: Optional[str] = None) -> bool:
@@ -819,28 +868,16 @@ def delete_pending_crew_by_phone(phone: str) -> bool:
 
 def get_boat_owner_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     """Fetch boat owner by phone. Returns None if not found or not boat_owner role."""
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """
-            SELECT u.id, u.name, u.email, u.phone
-            FROM users u
-            JOIN roles r ON u.role_id = r.id
-            WHERE u.phone = %s AND r.name = 'boat_owner' AND u.deleted_at IS NULL
-            """,
-            (phone.strip(),)
-        )
-        row = cur.fetchone()
-        if row:
-            return {"id": str(row[0]), "name": row[1], "email": row[2], "phone": row[3]}
+    users = _get_users_by_phone_for_role(phone, "boat_owner")
+    if not users:
         return None
-    except Exception as e:
-        print(f"Error fetching boat owner by phone: {e}")
-        return None
-    finally:
-        cur.close()
-        conn.close()
+    user = users[0]
+    return {
+        "id": user["id"],
+        "name": user["name"],
+        "email": user["email"],
+        "phone": (phone or "").strip(),
+    }
 
 
 def get_boat_owner_by_name(name: str) -> Optional[Dict[str, Any]]:
